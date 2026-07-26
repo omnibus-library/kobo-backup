@@ -9,6 +9,11 @@ use crate::app::{App, Screen};
 pub fn draw(f: &mut Frame, app: &App) {
     match &app.screen {
         Screen::Home { selected } => screens::home(f, app, *selected),
+        Screen::ChooseBackupDir {
+            selected,
+            custom,
+            error,
+        } => screens::choose_backup_dir(f, app, *selected, custom, error),
         Screen::Detect {
             selected,
             manual,

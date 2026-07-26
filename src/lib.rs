@@ -1,5 +1,6 @@
 pub mod app;
 pub mod archive;
+pub mod config;
 pub mod device;
 pub mod event;
 pub mod insights;

@@ -1,3 +1,7 @@
+// This module is compiled into every integration-test binary, so helpers used
+// by only some of them would otherwise look dead.
+#![allow(dead_code)]
+
 use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;

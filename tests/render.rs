@@ -83,6 +83,7 @@ impl Harness {
 fn screen_name(screen: &Screen) -> &'static str {
     match screen {
         Screen::Home { .. } => "Home",
+        Screen::ChooseBackupDir { .. } => "ChooseBackupDir",
         Screen::Detect { .. } => "Detect",
         Screen::DeviceInfo { .. } => "DeviceInfo",
         Screen::Progress { .. } => "Progress",
@@ -155,6 +156,18 @@ fn every_screen_renders_through_both_flows() {
     });
 
     // Overlay screens.
+    h.app.screen = Screen::ChooseBackupDir {
+        selected: 0,
+        custom: None,
+        error: None,
+    };
+    h.draw();
+    h.app.screen = Screen::ChooseBackupDir {
+        selected: App::backup_dir_choices().len(),
+        custom: Some("/tmp/some/path".into()),
+        error: Some("cannot use that directory".into()),
+    };
+    h.draw();
     h.app.screen = Screen::ConfirmQuit;
     h.draw();
     h.app.screen = Screen::Error {
@@ -175,6 +188,7 @@ fn every_screen_renders_through_both_flows() {
 
     let expected = [
         "Home",
+        "ChooseBackupDir",
         "Detect",
         "DeviceInfo",
         "Progress",

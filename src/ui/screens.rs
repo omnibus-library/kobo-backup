@@ -76,10 +76,18 @@ pub fn home(f: &mut Frame, app: &App, selected: usize) {
         );
     }
 
-    let mut notes = vec![Line::from(Span::styled(
-        format!("Backups are stored in {}", app.out_dir.display()),
-        Style::default().fg(DIM),
-    ))];
+    let mut notes = vec![Line::from(vec![
+        Span::styled("Backups folder: ", Style::default().fg(DIM)),
+        Span::styled(
+            app.out_dir.display().to_string(),
+            Style::default().fg(Color::Gray),
+        ),
+        Span::styled(
+            format!("  ({}) ", app.out_dir_source.describe()),
+            Style::default().fg(DIM),
+        ),
+        Span::styled("— press c to change", Style::default().fg(DIM)),
+    ])];
     if !app.stale_partials.is_empty() {
         notes.push(Line::from(Span::styled(
             format!(
@@ -101,7 +109,132 @@ pub fn home(f: &mut Frame, app: &App, selected: usize) {
     widgets::footer(
         f,
         chrome.footer,
-        &[("↑↓", "choose"), ("Enter", "select"), ("q", "quit")],
+        &[
+            ("↑↓", "choose"),
+            ("Enter", "select"),
+            ("c", "backups folder"),
+            ("q", "quit"),
+        ],
+    );
+}
+
+// -------------------------------------------------- choose backup directory
+
+pub fn choose_backup_dir(
+    f: &mut Frame,
+    app: &App,
+    selected: usize,
+    custom: &Option<String>,
+    error: &Option<String>,
+) {
+    let chrome = widgets::chrome(f);
+    let first_run = app.out_dir_source.needs_prompt();
+    widgets::title_bar(
+        f,
+        chrome.title,
+        if first_run {
+            "WHERE SHOULD BACKUPS BE KEPT?"
+        } else {
+            "CHANGE BACKUPS FOLDER"
+        },
+        None,
+    );
+    let body = widgets::padded(chrome.body, 4);
+
+    let choices = App::backup_dir_choices();
+    let custom_index = choices.len();
+
+    let mut lines: Vec<Line> = vec![Line::raw("")];
+    if first_run {
+        lines.push(Line::from(
+            "Backups are large — often more than a gigabyte each — so pick somewhere \
+             deliberate rather than letting them land wherever you happened to run this.",
+        ));
+    }
+    lines.push(Line::from(
+        "The restore wizard looks for backups in this same folder, so keeping them in \
+         one place is what makes them findable later."
+            .fg(DIM),
+    ));
+    lines.push(Line::raw(""));
+
+    for (i, (label, path)) in choices.iter().enumerate() {
+        let is_selected = i == selected && custom.is_none();
+        let style = if is_selected {
+            Style::default().fg(Color::Black).bg(ACCENT).bold()
+        } else {
+            Style::default().fg(Color::White)
+        };
+        lines.push(Line::from(Span::styled(
+            format!("{} {label} ", if is_selected { " ▸" } else { "  " }),
+            style,
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("     {}", path.display()),
+            Style::default().fg(DIM),
+        )));
+    }
+
+    let custom_selected = selected == custom_index || custom.is_some();
+    let style = if custom_selected {
+        Style::default().fg(Color::Black).bg(ACCENT).bold()
+    } else {
+        Style::default().fg(Color::White)
+    };
+    lines.push(Line::from(Span::styled(
+        format!(
+            "{} Somewhere else… ",
+            if custom_selected { " ▸" } else { "  " }
+        ),
+        style,
+    )));
+
+    if let Some(input) = custom {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(
+            "Type a path (Enter to use it, Esc to go back):".bold(),
+        ));
+        lines.push(Line::from(Span::styled(
+            format!("  {input}▏"),
+            Style::default().fg(ACCENT),
+        )));
+        lines.push(Line::from(
+            "  ~ is expanded; the folder is created if needed.".fg(DIM),
+        ));
+    }
+
+    if let Some(err) = error {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            format!("✗ {err}"),
+            Style::default().fg(DANGER),
+        )));
+    }
+
+    lines.push(Line::raw(""));
+    lines.push(Line::from(
+        format!(
+            "Your choice is saved to {} and can be changed any time with c from the \
+             main menu. A single run can always override it with --out <dir> or the \
+             {} environment variable.",
+            app.config_path.display(),
+            crate::config::ENV_VAR
+        )
+        .fg(DIM),
+    ));
+
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
+
+    widgets::safety_line(
+        f,
+        chrome.safety,
+        "Nothing is written anywhere until you choose.",
+        OK,
+    );
+    widgets::footer(
+        f,
+        chrome.footer,
+        &[("↑↓", "choose"), ("Enter", "select"), ("Esc", "back")],
     );
 }
 

@@ -6,6 +6,7 @@ use crossbeam_channel::Sender;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::archive;
+use crate::config;
 use crate::device::{self, Device};
 use crate::event::{Event, Events};
 use crate::insights::{self, LibraryInsights};
@@ -31,6 +32,12 @@ pub enum Flow {
 pub enum Screen {
     Home {
         selected: usize,
+    },
+    /// First run (or `c` from Home) — choose where backups are kept.
+    ChooseBackupDir {
+        selected: usize,
+        custom: Option<String>,
+        error: Option<String>,
     },
     /// B1 / R4 — pick the Kobo.
     Detect {
@@ -102,7 +109,14 @@ pub struct App {
     pub screen: Screen,
     pub flow: Flow,
     pub should_quit: bool,
+    /// Effective backup directory (see `config::resolve` for precedence).
     pub out_dir: PathBuf,
+    /// Where `out_dir` came from — shown in the UI so it is never a mystery.
+    pub out_dir_source: config::Source,
+    /// Flow the user picked before being asked to choose a backup location.
+    pending_flow: Option<Flow>,
+    /// Path the chosen backup location is persisted to.
+    pub config_path: PathBuf,
     pub manual_device: Option<PathBuf>,
 
     // Detection results (kept out of Screen so rescans are cheap).
@@ -137,13 +151,37 @@ pub struct App {
 
 impl App {
     pub fn new(args: &CliArgs, tx: Sender<Event>) -> Self {
-        let out_dir = args.out_dir.clone().unwrap_or_else(default_out_dir);
-        let stale_partials = find_stale_partials(&out_dir);
+        let resolution = config::resolve(args.out_dir.clone());
+        Self::build(args, tx, resolution, config::config_file())
+    }
+
+    /// Construct with an explicit resolution and config path. Tests use this
+    /// so they can exercise the first-run chooser without reading or writing
+    /// the real `~/.config/kobo-backup/config.toml`.
+    pub fn with_config(
+        args: &CliArgs,
+        tx: Sender<Event>,
+        resolution: config::Resolution,
+        config_path: PathBuf,
+    ) -> Self {
+        Self::build(args, tx, resolution, config_path)
+    }
+
+    fn build(
+        args: &CliArgs,
+        tx: Sender<Event>,
+        resolution: config::Resolution,
+        config_path: PathBuf,
+    ) -> Self {
+        let stale_partials = find_stale_partials(&resolution.dir);
         App {
+            config_path,
             screen: Screen::Home { selected: 0 },
             flow: Flow::Backup,
             should_quit: false,
-            out_dir,
+            out_dir: resolution.dir,
+            out_dir_source: resolution.source,
+            pending_flow: None,
             manual_device: args.device.clone(),
             devices: Vec::new(),
             stale_partials,
@@ -196,6 +234,11 @@ impl App {
 
         match self.screen.clone() {
             Screen::Home { selected } => self.key_home(key, selected),
+            Screen::ChooseBackupDir {
+                selected,
+                custom,
+                error,
+            } => self.key_choose_backup_dir(key, selected, custom, error),
             Screen::Detect {
                 selected, manual, ..
             } => self.key_detect(key, selected, manual),
@@ -248,20 +291,161 @@ impl App {
                 }
                 self.stale_partials.clear();
             }
+            KeyCode::Char('c') => self.enter_choose_backup_dir(None),
             KeyCode::Enter => match selected {
-                0 => {
-                    self.reset_flow_data();
-                    self.flow = Flow::Backup;
-                    self.enter_detect();
-                }
-                1 => {
-                    self.reset_flow_data();
-                    self.flow = Flow::Restore;
-                    self.enter_pick_zip();
-                }
+                0 => self.start_flow(Flow::Backup),
+                1 => self.start_flow(Flow::Restore),
                 _ => self.should_quit = true,
             },
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
+            _ => {}
+        }
+    }
+
+    /// Begin a wizard — but if no backup location has ever been chosen, ask
+    /// first. Nothing should ever be written to a directory the user did not
+    /// pick.
+    fn start_flow(&mut self, flow: Flow) {
+        self.reset_flow_data();
+        self.flow = flow;
+        if self.out_dir_source.needs_prompt() {
+            self.enter_choose_backup_dir(Some(flow));
+            return;
+        }
+        match flow {
+            Flow::Backup => self.enter_detect(),
+            Flow::Restore => self.enter_pick_zip(),
+        }
+    }
+
+    fn enter_choose_backup_dir(&mut self, pending: Option<Flow>) {
+        self.pending_flow = pending;
+        self.screen = Screen::ChooseBackupDir {
+            selected: 0,
+            custom: None,
+            error: None,
+        };
+    }
+
+    /// The presets offered on the chooser: (label, path).
+    pub fn backup_dir_choices() -> Vec<(String, PathBuf)> {
+        let mut choices = Vec::new();
+        if let Ok(cwd) = std::env::current_dir() {
+            choices.push(("Current directory".to_string(), cwd));
+        }
+        choices.push(("Home folder".to_string(), config::fallback_dir()));
+        choices
+    }
+
+    fn commit_backup_dir(&mut self, dir: PathBuf) {
+        // Prove it is usable before recording it, so a bad choice fails here
+        // rather than after a long scan.
+        if let Err(err) = std::fs::create_dir_all(&dir) {
+            self.screen = Screen::ChooseBackupDir {
+                selected: 0,
+                custom: Some(dir.display().to_string()),
+                error: Some(format!("cannot use that directory: {err}")),
+            };
+            return;
+        }
+        match config::save_backup_dir_to(&self.config_path, &dir) {
+            Ok(()) => {
+                self.out_dir = dir;
+                self.out_dir_source = config::Source::ConfigFile(self.config_path.clone());
+                self.stale_partials = find_stale_partials(&self.out_dir);
+                match self.pending_flow.take() {
+                    Some(Flow::Backup) => self.enter_detect(),
+                    Some(Flow::Restore) => self.enter_pick_zip(),
+                    None => self.screen = Screen::Home { selected: 0 },
+                }
+            }
+            Err(err) => self.fail("Could not save your choice", format!("{err:#}")),
+        }
+    }
+
+    fn key_choose_backup_dir(
+        &mut self,
+        key: KeyEvent,
+        selected: usize,
+        custom: Option<String>,
+        error: Option<String>,
+    ) {
+        let choices = Self::backup_dir_choices();
+        let custom_index = choices.len();
+
+        if let Some(mut input) = custom {
+            match key.code {
+                KeyCode::Esc => {
+                    self.screen = Screen::ChooseBackupDir {
+                        selected: custom_index,
+                        custom: None,
+                        error: None,
+                    }
+                }
+                KeyCode::Enter => {
+                    let trimmed = input.trim();
+                    if trimmed.is_empty() {
+                        self.screen = Screen::ChooseBackupDir {
+                            selected: custom_index,
+                            custom: Some(input),
+                            error: Some("enter a path, or press Esc to go back".into()),
+                        };
+                    } else {
+                        let expanded = config::expand_user_path(trimmed);
+                        self.commit_backup_dir(expanded);
+                    }
+                }
+                KeyCode::Backspace => {
+                    input.pop();
+                    self.screen = Screen::ChooseBackupDir {
+                        selected: custom_index,
+                        custom: Some(input),
+                        error: None,
+                    };
+                }
+                KeyCode::Char(c) => {
+                    input.push(c);
+                    self.screen = Screen::ChooseBackupDir {
+                        selected: custom_index,
+                        custom: Some(input),
+                        error: None,
+                    };
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.pending_flow = None;
+                self.screen = Screen::Home { selected: 0 };
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.screen = Screen::ChooseBackupDir {
+                    selected: selected.saturating_sub(1),
+                    custom: None,
+                    error,
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.screen = Screen::ChooseBackupDir {
+                    selected: (selected + 1).min(custom_index),
+                    custom: None,
+                    error,
+                }
+            }
+            KeyCode::Enter => {
+                if selected == custom_index {
+                    self.screen = Screen::ChooseBackupDir {
+                        selected,
+                        custom: Some(String::new()),
+                        error: None,
+                    };
+                } else if let Some((_, dir)) = choices.get(selected).cloned() {
+                    self.commit_backup_dir(dir);
+                }
+            }
             _ => {}
         }
     }
@@ -1162,12 +1346,6 @@ impl App {
             }
         }
     }
-}
-
-fn default_out_dir() -> PathBuf {
-    std::env::var("HOME")
-        .map(|home| PathBuf::from(home).join("KoboBackups"))
-        .unwrap_or_else(|_| PathBuf::from("KoboBackups"))
 }
 
 fn safety_backup_root() -> PathBuf {

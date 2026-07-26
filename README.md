@@ -19,9 +19,42 @@ Optional flags:
 | Flag | Meaning |
 |---|---|
 | `--device <path>` | Use this mount path instead of auto-detection (e.g. `/Volumes/KOBOeReader`) |
-| `--out <dir>` | Where backup zips are stored (default `~/KoboBackups`) |
+| `--out <dir>` | Backup folder for this run only; does not change the saved setting |
 
 Connect the Kobo over USB, tap **Connect** on its screen, and run the app.
+
+## Where backups are kept
+
+The first time you start a backup or restore, the wizard asks where backups
+should live — the current directory, your home folder, or a path you type —
+and remembers the answer. Nothing is written anywhere until you choose.
+
+The restore wizard looks for backups in that same folder, which is why the
+location is a persisted setting rather than "wherever you happened to run
+this": scattered backups are backups you can't find later.
+
+Resolution order, highest first:
+
+| Source | Persisted? |
+|---|---|
+| `--out <dir>` | No — this run only |
+| `KOBO_BACKUP_DIR` environment variable | No |
+| `backup_dir` in the config file | Yes |
+| First-run prompt | Saves your choice |
+
+The config file lives at `$XDG_CONFIG_HOME/kobo-backup/config.toml`, falling
+back to `~/.config/kobo-backup/config.toml`:
+
+```toml
+backup_dir = "~/KoboBackups"
+```
+
+It's a small hand-parsed subset of TOML (`key = "value"` and `#` comments), so
+the tool has no TOML dependency. A leading `~` is expanded. Unknown keys and
+malformed lines are ignored rather than fatal — a bad config must never stand
+between you and your backups. Press `c` at the main menu to change the folder
+at any time; the menu always shows the current location and where the setting
+came from.
 
 ## What a backup contains
 
@@ -100,6 +133,7 @@ screen on a headless terminal.
 
 ### Layout
 
+- `src/config.rs` — backup-location setting: parsing, precedence, persistence
 - `src/inventory/` — read-only volume scan, exclusions, SHA-256
 - `src/insights.rs` — library facts from a copy of `KoboReader.sqlite` (never opens the device DB)
 - `src/archive/` — streaming zip write/read, manifest-last discipline
