@@ -3,6 +3,8 @@
 A transparency-first terminal app (Rust + [Ratatui](https://ratatui.rs)) that backs up a Kobo
 e-reader to a single zip file and can restore the device to exactly that point in time —
 books, annotations, highlights, reading progress, collections, settings, and databases.
+It can also point the device's wireless sync at a self-hosted server
+(see [Configure wireless sync](#configure-wireless-sync)).
 
 Built around one principle: **you should never have to trust it blindly.** Every step shows
 exactly what it is about to do, requires an explicit confirmation (the default action is
@@ -108,6 +110,28 @@ Restore:
 6. Aborting mid-restore leaves a mix of old and complete new files (never partial ones);
    re-running the restore is idempotent and finishes the job.
 
+## Configure wireless sync
+
+Stock Kobo firmware has no on-device setting for a custom sync server — pointing a
+Kobo at a self-hosted server (Omnibus, Calibre-Web) means editing the `api_endpoint`
+key in `.kobo/Kobo/Kobo eReader.conf` over USB. **Configure wireless sync** on the
+main menu does that edit for you, with the same discipline as a restore:
+
+1. Pick the device, paste the endpoint URL your server shows
+   (e.g. `https://your-server.example.com/kobo/<token>`).
+2. Review the exact one-line change (old value → new value) before consenting —
+   Cancel is the default.
+3. A verbatim copy of the current conf is saved to
+   `~/.kobo-backup/conf-edits/<serial>-<timestamp>/` first, so the change is always
+   undoable; the new file is written to a temp name, renamed into place, and the
+   value is re-read from the device to verify it landed.
+
+Only that one file is touched — books, annotations, and databases are not. To undo,
+copy the saved conf back onto the device (or run the flow again with the old URL).
+
+Before the *first* sync against a brand-new server, run a full backup — a server that
+mishandles Kobo's annotation channel can cause the device to clear its own highlights.
+
 ## Manual verification protocol (real hardware)
 
 1. Plug in the Kobo, run a backup, and let verification finish (all checks green).
@@ -138,5 +162,6 @@ screen on a headless terminal.
 - `src/insights.rs` — library facts from a copy of `KoboReader.sqlite` (never opens the device DB)
 - `src/archive/` — streaming zip write/read, manifest-last discipline
 - `src/verify.rs` — both verification directions
-- `src/restore/` — diff plan + `apply.rs`, the **only** code that writes to the device
+- `src/restore/` — diff plan + `apply.rs`; with `sync_endpoint.rs`, one of the only two code paths that write to the device
+- `src/sync_endpoint.rs` — wireless-sync endpoint configurator: conf parse/edit + the safety-copied, verified write
 - `src/app.rs` — wizard state machine; `src/ui/` — Ratatui screens & widgets

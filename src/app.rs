@@ -14,6 +14,7 @@ use crate::inventory::{self, Inventory};
 use crate::manifest::Manifest;
 use crate::progress::{CancelToken, ProgressUpdate};
 use crate::restore::{self, ApplyOptions, ApplyReport, DevicePlan};
+use crate::sync_endpoint;
 use crate::verify::{self, VerifyReport};
 use crate::worker::{self, JobOutput, WorkerHandle, WorkerMsg};
 use crate::CliArgs;
@@ -25,6 +26,9 @@ pub const RESTORE_PHRASE: &str = "RESTORE";
 pub enum Flow {
     Backup,
     Restore,
+    /// Point the device's wireless sync at a self-hosted server by rewriting
+    /// `api_endpoint` in `Kobo eReader.conf`.
+    ConfigureSync,
 }
 
 /// Which screen is on. Payload-light: shared data lives on `App`.
@@ -98,6 +102,17 @@ pub enum Screen {
     RestoreReport {
         scroll: u16,
     },
+    /// S2 — paste the new sync endpoint URL.
+    SyncEndpointEntry {
+        input: String,
+        error: Option<String>,
+    },
+    /// S3 — before/after preview of the conf edit; Cancel is the default.
+    SyncEndpointConfirm {
+        apply: bool,
+    },
+    /// S4 — what changed and where the pre-edit conf was saved.
+    SyncEndpointReport,
     Error {
         title: String,
         message: String,
@@ -147,6 +162,13 @@ pub struct App {
     pub micro_backup_dir: Option<PathBuf>,
     pub apply_report: Option<ApplyReport>,
     pub restore_report: Option<VerifyReport>,
+
+    // Configure-sync flow data.
+    /// The `api_endpoint` currently in the device's conf, read on entry.
+    pub sync_current: Option<String>,
+    /// The validated URL waiting for confirmation.
+    pub sync_candidate: Option<String>,
+    pub sync_outcome: Option<sync_endpoint::Outcome>,
 }
 
 impl App {
@@ -204,6 +226,9 @@ impl App {
             micro_backup_dir: None,
             apply_report: None,
             restore_report: None,
+            sync_current: None,
+            sync_candidate: None,
+            sync_outcome: None,
         }
     }
 
@@ -265,6 +290,9 @@ impl App {
             }
             Screen::TypedConfirm { typed } => self.key_typed_confirm(key, typed),
             Screen::RestoreReport { scroll } => self.key_restore_report(key, scroll),
+            Screen::SyncEndpointEntry { input, .. } => self.key_sync_entry(key, input),
+            Screen::SyncEndpointConfirm { apply } => self.key_sync_confirm(key, apply),
+            Screen::SyncEndpointReport => self.key_sync_report(key),
             Screen::Error { .. } => self.key_error(key),
             Screen::ConfirmQuit => self.key_confirm_quit(key),
         }
@@ -273,7 +301,7 @@ impl App {
     // ------------------------------------------------------------- per screen
 
     fn key_home(&mut self, key: KeyEvent, selected: usize) {
-        const ITEMS: usize = 3;
+        const ITEMS: usize = 4;
         match key.code {
             KeyCode::Up | KeyCode::Char('k') => {
                 self.screen = Screen::Home {
@@ -295,6 +323,7 @@ impl App {
             KeyCode::Enter => match selected {
                 0 => self.start_flow(Flow::Backup),
                 1 => self.start_flow(Flow::Restore),
+                2 => self.start_flow(Flow::ConfigureSync),
                 _ => self.should_quit = true,
             },
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
@@ -308,12 +337,14 @@ impl App {
     fn start_flow(&mut self, flow: Flow) {
         self.reset_flow_data();
         self.flow = flow;
-        if self.out_dir_source.needs_prompt() {
+        // The endpoint flow writes nothing to the backups folder, so it never
+        // needs the first-run location prompt.
+        if flow != Flow::ConfigureSync && self.out_dir_source.needs_prompt() {
             self.enter_choose_backup_dir(Some(flow));
             return;
         }
         match flow {
-            Flow::Backup => self.enter_detect(),
+            Flow::Backup | Flow::ConfigureSync => self.enter_detect(),
             Flow::Restore => self.enter_pick_zip(),
         }
     }
@@ -354,7 +385,7 @@ impl App {
                 self.out_dir_source = config::Source::ConfigFile(self.config_path.clone());
                 self.stale_partials = find_stale_partials(&self.out_dir);
                 match self.pending_flow.take() {
-                    Some(Flow::Backup) => self.enter_detect(),
+                    Some(Flow::Backup | Flow::ConfigureSync) => self.enter_detect(),
                     Some(Flow::Restore) => self.enter_pick_zip(),
                     None => self.screen = Screen::Home { selected: 0 },
                 }
@@ -557,6 +588,89 @@ impl App {
         match self.flow {
             Flow::Backup => self.screen = Screen::DeviceInfo { proceed: false },
             Flow::Restore => self.check_serial(),
+            Flow::ConfigureSync => self.enter_sync_entry(),
+        }
+    }
+
+    // ------------------------------------------------- configure-sync screens
+
+    fn enter_sync_entry(&mut self) {
+        let Some(device) = &self.device else {
+            return;
+        };
+        let conf = std::fs::read_to_string(device.mount.join(sync_endpoint::CONF_RELATIVE))
+            .unwrap_or_default();
+        self.sync_current = sync_endpoint::read_endpoint(&conf);
+        self.screen = Screen::SyncEndpointEntry {
+            input: self.sync_candidate.clone().unwrap_or_default(),
+            error: None,
+        };
+    }
+
+    fn key_sync_entry(&mut self, key: KeyEvent, mut input: String) {
+        match key.code {
+            // No `q`-to-quit here — the URL being typed can contain one.
+            KeyCode::Esc => self.enter_detect(),
+            KeyCode::Enter => match sync_endpoint::validate_url(&input) {
+                Ok(url) => {
+                    self.sync_candidate = Some(url);
+                    self.screen = Screen::SyncEndpointConfirm { apply: false };
+                }
+                Err(msg) => {
+                    self.screen = Screen::SyncEndpointEntry {
+                        input,
+                        error: Some(msg),
+                    }
+                }
+            },
+            KeyCode::Backspace => {
+                input.pop();
+                self.screen = Screen::SyncEndpointEntry { input, error: None };
+            }
+            KeyCode::Char(c) => {
+                input.push(c);
+                self.screen = Screen::SyncEndpointEntry { input, error: None };
+            }
+            _ => {}
+        }
+    }
+
+    fn key_sync_confirm(&mut self, key: KeyEvent, apply: bool) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.back_to_sync_entry(),
+            KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
+                self.screen = Screen::SyncEndpointConfirm { apply: !apply }
+            }
+            KeyCode::Enter if apply => self.apply_sync_endpoint(),
+            KeyCode::Enter => self.back_to_sync_entry(),
+            _ => {}
+        }
+    }
+
+    fn back_to_sync_entry(&mut self) {
+        self.screen = Screen::SyncEndpointEntry {
+            input: self.sync_candidate.clone().unwrap_or_default(),
+            error: None,
+        };
+    }
+
+    /// The conf write is a few hundred bytes — no worker, applied inline.
+    fn apply_sync_endpoint(&mut self) {
+        let (Some(device), Some(url)) = (self.device.clone(), self.sync_candidate.clone()) else {
+            return;
+        };
+        match sync_endpoint::apply(&device, &url, &conf_edit_root()) {
+            Ok(outcome) => {
+                self.sync_outcome = Some(outcome);
+                self.screen = Screen::SyncEndpointReport;
+            }
+            Err(err) => self.fail("Could not update the sync endpoint", format!("{err:#}")),
+        }
+    }
+
+    fn key_sync_report(&mut self, key: KeyEvent) {
+        if matches!(key.code, KeyCode::Enter | KeyCode::Esc | KeyCode::Char('q')) {
+            self.go_home();
         }
     }
 
@@ -1296,6 +1410,9 @@ impl App {
         self.micro_backup_dir = None;
         self.apply_report = None;
         self.restore_report = None;
+        self.sync_current = None;
+        self.sync_candidate = None;
+        self.sync_outcome = None;
         self.progress = ProgressUpdate::default();
         self.progress_started = None;
     }
@@ -1333,6 +1450,9 @@ impl App {
                     "Aborted before anything was written to the device.".to_string()
                 }
             }
+            // The endpoint flow runs no worker jobs; an abort can only happen
+            // before the (inline, atomic) conf write.
+            Flow::ConfigureSync => "Aborted. The sync endpoint was not changed.".to_string(),
         }
     }
 
@@ -1352,6 +1472,18 @@ fn safety_backup_root() -> PathBuf {
     std::env::var("HOME")
         .map(|home| PathBuf::from(home).join(".kobo-backup").join("pre-restore"))
         .unwrap_or_else(|_| PathBuf::from(".kobo-backup-pre-restore"))
+}
+
+/// Where pre-edit copies of `Kobo eReader.conf` are kept, mirroring
+/// `safety_backup_root`. `KOBO_BACKUP_CONF_EDIT_DIR` overrides it (tests use
+/// this to stay out of the real home directory).
+fn conf_edit_root() -> PathBuf {
+    if let Ok(dir) = std::env::var("KOBO_BACKUP_CONF_EDIT_DIR") {
+        return PathBuf::from(dir);
+    }
+    std::env::var("HOME")
+        .map(|home| PathBuf::from(home).join(".kobo-backup").join("conf-edits"))
+        .unwrap_or_else(|_| PathBuf::from(".kobo-backup-conf-edits"))
 }
 
 fn find_stale_partials(out_dir: &std::path::Path) -> Vec<PathBuf> {

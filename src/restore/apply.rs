@@ -77,8 +77,9 @@ fn copy_order_key(entry: &FileEntry) -> (u8, String) {
     (tier, entry.path.clone())
 }
 
-/// Apply the plan to the device. The ONLY function in the codebase that
-/// writes to or deletes from the Kobo.
+/// Apply the plan to the device. One of exactly two functions in the codebase
+/// that write to the Kobo (the other is `sync_endpoint::apply`, which touches
+/// only `Kobo eReader.conf`); the only one that deletes.
 ///
 /// Discipline per file: stream to `<target>.kbtmp` while hashing → compare
 /// hash against the manifest BEFORE rename → fsync → atomic-ish rename over
