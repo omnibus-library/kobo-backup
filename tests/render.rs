@@ -96,6 +96,9 @@ fn screen_name(screen: &Screen) -> &'static str {
         Screen::DeleteConsent { .. } => "DeleteConsent",
         Screen::TypedConfirm { .. } => "TypedConfirm",
         Screen::RestoreReport { .. } => "RestoreReport",
+        Screen::SyncEndpointEntry { .. } => "SyncEndpointEntry",
+        Screen::SyncEndpointConfirm { .. } => "SyncEndpointConfirm",
+        Screen::SyncEndpointReport => "SyncEndpointReport",
         Screen::Error { .. } => "Error",
         Screen::ConfirmQuit => "ConfirmQuit",
     }
@@ -154,6 +157,24 @@ fn every_screen_renders_through_both_flows() {
     h.pump_until("restore report", |a| {
         matches!(a.screen, Screen::RestoreReport { .. })
     });
+    h.key(KeyCode::Enter); // Home
+
+    // Configure-sync flow.
+    std::env::set_var("KOBO_BACKUP_CONF_EDIT_DIR", out.path().join("conf-edits"));
+    h.key(KeyCode::Down);
+    h.key(KeyCode::Down);
+    h.key(KeyCode::Enter); // Detect
+    h.key(KeyCode::Enter); // SyncEndpointEntry
+    h.type_str("https://omni.example.com/kobo/tok");
+    h.key(KeyCode::Enter); // SyncEndpointConfirm
+    h.key(KeyCode::Tab); // select Apply
+    h.key(KeyCode::Enter); // SyncEndpointReport
+    assert!(
+        matches!(h.app.screen, Screen::SyncEndpointReport),
+        "apply must land on the report (screen: {:?})",
+        h.app.screen
+    );
+    h.key(KeyCode::Enter); // Home
 
     // Overlay screens.
     h.app.screen = Screen::ChooseBackupDir {
@@ -200,6 +221,9 @@ fn every_screen_renders_through_both_flows() {
         "DeleteConsent",
         "TypedConfirm",
         "RestoreReport",
+        "SyncEndpointEntry",
+        "SyncEndpointConfirm",
+        "SyncEndpointReport",
         "ConfirmQuit",
         "Error",
         "SerialGate",

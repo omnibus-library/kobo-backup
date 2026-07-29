@@ -8,6 +8,7 @@ pub mod inventory;
 pub mod manifest;
 pub mod progress;
 pub mod restore;
+pub mod sync_endpoint;
 pub mod ui;
 pub mod util;
 pub mod verify;

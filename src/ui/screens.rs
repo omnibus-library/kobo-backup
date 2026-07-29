@@ -41,6 +41,7 @@ pub fn home(f: &mut Frame, app: &App, selected: usize) {
         Constraint::Length(2),
         Constraint::Length(2),
         Constraint::Length(2),
+        Constraint::Length(2),
         Constraint::Min(0),
     ])
     .split(body);
@@ -59,7 +60,12 @@ pub fn home(f: &mut Frame, app: &App, selected: usize) {
     .wrap(Wrap { trim: true });
     f.render_widget(intro, rows[0]);
 
-    let items = ["Back up my Kobo", "Restore my Kobo", "Quit"];
+    let items = [
+        "Back up my Kobo",
+        "Restore my Kobo",
+        "Configure wireless sync",
+        "Quit",
+    ];
     for (i, item) in items.iter().enumerate() {
         let style = if i == selected {
             Style::default().fg(Color::Black).bg(ACCENT).bold()
@@ -98,7 +104,7 @@ pub fn home(f: &mut Frame, app: &App, selected: usize) {
             Style::default().fg(WARN),
         )));
     }
-    f.render_widget(Paragraph::new(notes).wrap(Wrap { trim: true }), rows[5]);
+    f.render_widget(Paragraph::new(notes).wrap(Wrap { trim: true }), rows[6]);
 
     widgets::safety_line(
         f,
@@ -251,6 +257,7 @@ pub fn detect(
     let (title, step) = match app.flow {
         Flow::Backup => ("BACKUP — FIND YOUR KOBO", Some((1, 4))),
         Flow::Restore => ("RESTORE — FIND YOUR KOBO", Some((3, 7))),
+        Flow::ConfigureSync => ("CONFIGURE SYNC — FIND YOUR KOBO", Some((1, 3))),
     };
     widgets::title_bar(f, chrome.title, title, step);
     let body = widgets::padded(chrome.body, 4);
@@ -415,6 +422,9 @@ pub fn progress(f: &mut Frame, app: &App, title: &str, abort_overlay: bool, abor
     let flow_title = match app.flow {
         Flow::Backup => format!("BACKUP — {}", title.to_uppercase()),
         Flow::Restore => format!("RESTORE — {}", title.to_uppercase()),
+        // Unreachable today (the endpoint flow runs no worker jobs), but the
+        // render must not panic if that ever changes.
+        Flow::ConfigureSync => format!("CONFIGURE SYNC — {}", title.to_uppercase()),
     };
     widgets::title_bar(f, chrome.title, &flow_title, None);
     let body = widgets::padded(chrome.body, 6);
@@ -1310,6 +1320,177 @@ pub fn restore_report(f: &mut Frame, app: &App, scroll: u16) {
         chrome.footer,
         &[("Enter", "home"), ("↑↓", "scroll"), ("e", "eject device")],
     );
+}
+
+// ---------------------------------------------------------- configure sync
+
+pub fn sync_endpoint_entry(f: &mut Frame, app: &App, input: &str, error: &Option<String>) {
+    let chrome = widgets::chrome(f);
+    widgets::title_bar(
+        f,
+        chrome.title,
+        "CONFIGURE SYNC — ENDPOINT URL",
+        Some((2, 3)),
+    );
+    let body = widgets::padded(chrome.body, 4);
+    let Some(device) = &app.device else { return };
+
+    let mut lines = vec![
+        Line::raw(""),
+        kv("Device", device.identity.model_name.clone()),
+        kv("Serial", device.identity.serial.clone()),
+        kv(
+            "Current sync endpoint",
+            app.sync_current
+                .clone()
+                .unwrap_or_else(|| "not set (Kobo's own store)".to_string()),
+        ),
+        Line::raw(""),
+        Line::from(
+            "Point this Kobo's wireless sync at a self-hosted server (Omnibus, \
+             Calibre-Web). Paste the endpoint URL your server shows — for Omnibus \
+             it looks like https://your-server.example.com/kobo/<token>.",
+        ),
+        Line::raw(""),
+        Line::from("New endpoint URL (Enter to continue, Esc to go back):".bold()),
+        Line::from(Span::styled(
+            format!("  {input}▏"),
+            Style::default().fg(ACCENT),
+        )),
+    ];
+    if let Some(err) = error {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            format!("✗ {err}"),
+            Style::default().fg(DANGER),
+        )));
+    }
+    if input.trim_start().starts_with("http://") {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(
+            "http:// is unencrypted — fine on a trusted home network, risky beyond it.".fg(WARN),
+        ));
+    }
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
+
+    widgets::safety_line(
+        f,
+        chrome.safety,
+        "Nothing has been written. The change is previewed before anything happens.",
+        OK,
+    );
+    widgets::footer(
+        f,
+        chrome.footer,
+        &[("Enter", "preview change"), ("Esc", "back")],
+    );
+}
+
+pub fn sync_endpoint_confirm(f: &mut Frame, app: &App, apply: bool) {
+    let chrome = widgets::chrome(f);
+    widgets::title_bar(f, chrome.title, "CONFIGURE SYNC — CONFIRM", Some((3, 3)));
+    let body = widgets::padded(chrome.body, 4);
+    let (Some(device), Some(candidate)) = (&app.device, &app.sync_candidate) else {
+        return;
+    };
+
+    let rows = Layout::vertical([Constraint::Min(6), Constraint::Length(2)]).split(body);
+    let conf = device.mount.join(crate::sync_endpoint::CONF_RELATIVE);
+    let lines = vec![
+        Line::raw(""),
+        Line::from("Exactly one line changes, in one file:".bold()),
+        Line::raw(""),
+        kv("File", conf.display().to_string()),
+        kv("Section", "[OneStoreServices]".to_string()),
+        Line::raw(""),
+        Line::from(vec![
+            Span::styled("  - api_endpoint=", Style::default().fg(DIM)),
+            Span::styled(
+                app.sync_current
+                    .clone()
+                    .unwrap_or_else(|| "(not set)".to_string()),
+                Style::default().fg(DANGER),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("  + api_endpoint=", Style::default().fg(DIM)),
+            Span::styled(candidate.clone(), Style::default().fg(OK).bold()),
+        ]),
+        Line::raw(""),
+        Line::from(
+            "A verbatim copy of the current file is saved on this computer first, \
+             so the change can always be undone. Every other line is preserved."
+                .fg(DIM),
+        ),
+        Line::from("After ejecting, tap Sync on the device to connect to the new server.".fg(DIM)),
+    ];
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), rows[0]);
+    widgets::confirm_bar(f, rows[1], "Cancel", "Apply the change", apply, false);
+
+    widgets::safety_line(
+        f,
+        chrome.safety,
+        "Only Kobo eReader.conf is touched — books, annotations, and databases are not.",
+        WARN,
+    );
+    widgets::footer(
+        f,
+        chrome.footer,
+        &[("Tab", "switch"), ("Enter", "confirm"), ("Esc", "back")],
+    );
+}
+
+pub fn sync_endpoint_report(f: &mut Frame, app: &App) {
+    let chrome = widgets::chrome(f);
+    widgets::title_bar(f, chrome.title, "CONFIGURE SYNC — DONE", None);
+    let body = widgets::padded(chrome.body, 4);
+    let Some(outcome) = &app.sync_outcome else {
+        return;
+    };
+
+    let mut lines = vec![
+        Line::raw(""),
+        Line::from(
+            "✓ The sync endpoint was updated and verified."
+                .fg(OK)
+                .bold(),
+        ),
+        Line::raw(""),
+        kv("File", outcome.conf_path.display().to_string()),
+        kv(
+            "Was",
+            outcome
+                .old
+                .clone()
+                .unwrap_or_else(|| "not set (Kobo's own store)".to_string()),
+        ),
+        kv("Now", outcome.new.clone()),
+    ];
+    if let Some(copy) = &outcome.safety_copy {
+        lines.push(kv("Pre-edit copy saved to", copy.display().to_string()));
+        lines.push(Line::from(
+            "To undo, copy that file back over the conf on the device.".fg(DIM),
+        ));
+    }
+    lines.extend([
+        Line::raw(""),
+        Line::from("Next steps".fg(ACCENT).bold()),
+        Line::from("  1. Eject the Kobo safely, then unplug it."),
+        Line::from("  2. On the device, tap Sync — it now talks to your server."),
+        Line::from(
+            "  3. If the server is brand new to this device, back up first: the first \
+             sync against a new server can affect on-device annotations.",
+        ),
+    ]);
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
+
+    widgets::safety_line(
+        f,
+        chrome.safety,
+        "The new value was read back from the device after writing.",
+        OK,
+    );
+    widgets::footer(f, chrome.footer, &[("Enter", "home")]);
 }
 
 // -------------------------------------------------------------------- error

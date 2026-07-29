@@ -45,6 +45,11 @@ pub fn draw(f: &mut Frame, app: &App) {
         }
         Screen::TypedConfirm { typed } => screens::typed_confirm(f, app, typed),
         Screen::RestoreReport { scroll } => screens::restore_report(f, app, *scroll),
+        Screen::SyncEndpointEntry { input, error } => {
+            screens::sync_endpoint_entry(f, app, input, error)
+        }
+        Screen::SyncEndpointConfirm { apply } => screens::sync_endpoint_confirm(f, app, *apply),
+        Screen::SyncEndpointReport => screens::sync_endpoint_report(f, app),
         Screen::Error { title, message } => screens::error(f, app, title, message),
         Screen::ConfirmQuit => screens::confirm_quit(f, app),
     }
