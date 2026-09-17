@@ -23,7 +23,7 @@ Please read the [Code of Conduct](CODE_OF_CONDUCT.md).
 Approval means a maintainer has either commented approving the approach or
 assigned the issue to you. Silence or a reaction is not approval. If nobody
 responds within seven days, leave one polite follow-up and mention
-`@seamus-sloan` or `@roberte777`.
+@seamus-sloan or @roberte777.
 
 Contributors with push access work on branches in this repository and may merge
 their own pull requests once every check is green and every review thread is
