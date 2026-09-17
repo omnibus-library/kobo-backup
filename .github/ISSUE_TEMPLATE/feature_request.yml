@@ -1,0 +1,29 @@
+name: Feature request
+description: Propose a new capability or a change to existing behaviour.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Features need maintainer approval before a pull request is opened. See [CONTRIBUTING.md](https://github.com/omnibus-library/kobo-backup/blob/main/CONTRIBUTING.md).
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What you want and why.
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Safety model
+      description: How does the user see, confirm, and verify what this does? Anything touching the device or a backup archive must answer this.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      placeholder: |
+        - AC1: ...
+        - AC2: ...

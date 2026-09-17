@@ -1,0 +1,42 @@
+name: Bug report
+description: Something is broken or behaves unexpectedly.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security issues go through [private vulnerability reporting](https://github.com/omnibus-library/kobo-backup/security/advisories/new), not here.
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Which menu item you chose and what you confirmed at each step.
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Kobo model and firmware
+      placeholder: e.g. Kobo Clara 2E, firmware 4.38.21908
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: Host OS and kobo-backup version
+      placeholder: e.g. macOS 15.6, commit a60d411
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: On-screen output
+      description: Paste the verification or error text the app showed. Redact file names if they're private.
+      render: shell

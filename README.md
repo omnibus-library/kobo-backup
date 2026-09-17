@@ -165,3 +165,8 @@ screen on a headless terminal.
 - `src/restore/` — diff plan + `apply.rs`; with `sync_endpoint.rs`, one of the only two code paths that write to the device
 - `src/sync_endpoint.rs` — wireless-sync endpoint configurator: conf parse/edit + the safety-copied, verified write
 - `src/app.rs` — wizard state machine; `src/ui/` — Ratatui screens & widgets
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how changes are proposed, approved, and merged, and
+[SECURITY.md](.github/SECURITY.md) for reporting vulnerabilities privately.
