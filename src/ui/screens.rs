@@ -38,7 +38,11 @@ pub fn home(f: &mut Frame, app: &App, selected: usize) {
     let mut constraints = vec![Constraint::Length(6), Constraint::Length(1)];
     constraints.extend(vec![Constraint::Length(2); items.len()]);
     constraints.push(Constraint::Length(1));
-    constraints.push(Constraint::Min(0));
+    // Min, not Length(0): ratatui gives Min priority over Length on tiny
+    // terminals, so the intro paragraph shrinks first and the notes area
+    // (device status, backups folder, eject outcome) always keeps enough
+    // room to be legible.
+    constraints.push(Constraint::Min(9));
     let rows = Layout::vertical(constraints).split(body);
 
     let intro = Paragraph::new(vec![
