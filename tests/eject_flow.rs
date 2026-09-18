@@ -54,9 +54,10 @@ fn recording_ejector(calls: Arc<Mutex<Vec<PathBuf>>>, ok: bool, unmount: bool) -
     })
 }
 
-/// The whole screen as text, one string per terminal row.
-fn rendered(app: &App) -> String {
-    let mut terminal = Terminal::new(TestBackend::new(200, 40)).unwrap();
+/// The whole screen as text, one string per terminal row, on a terminal of
+/// the given size.
+fn rendered_at(app: &App, width: u16, height: u16) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|f| ui::draw(f, app)).unwrap();
     let buffer = terminal.backend().buffer().clone();
     (0..buffer.area.height)
@@ -67,6 +68,12 @@ fn rendered(app: &App) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The whole screen as text, one string per terminal row, on a roomy
+/// terminal.
+fn rendered(app: &App) -> String {
+    rendered_at(app, 200, 40)
 }
 
 #[test]
@@ -136,6 +143,78 @@ fn a_failed_eject_is_reported_not_swallowed() {
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.screen, Screen::Home { .. }));
     assert!(app.last_eject.is_none(), "last_eject must clear on go_home");
+}
+
+#[test]
+fn home_outcome_is_visible_on_an_80x24_terminal() {
+    let (_guard, mount) = stage_fake_device();
+    let out = tempfile::tempdir().unwrap();
+    let mut app = app_for(&mount, out.path());
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    app.set_ejector(recording_ejector(calls.clone(), false, false));
+
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Enter);
+
+    let screen = rendered_at(&app, 80, 24);
+    assert!(
+        screen.contains("✗ Could not eject"),
+        "the outcome headline must survive a small terminal:\n{screen}"
+    );
+    assert!(
+        screen.contains("still in use"),
+        "the busy hint must survive a small terminal:\n{screen}"
+    );
+    assert!(
+        screen.contains("Backups folder:"),
+        "the notes area must not be squeezed out entirely:\n{screen}"
+    );
+}
+
+#[test]
+fn a_remounted_kobo_clears_the_safe_to_unplug_line() {
+    let (_guard, mount) = stage_fake_device();
+    let out = tempfile::tempdir().unwrap();
+    let mut app = app_for(&mount, out.path());
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    app.set_ejector(recording_ejector(calls.clone(), true, true));
+
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Enter);
+
+    let screen = rendered(&app);
+    assert!(
+        screen.contains("safe to unplug"),
+        "the eject outcome must render before the remount:\n{screen}"
+    );
+
+    // Re-plug: recreate the marker file the way stage_fake_device does.
+    std::fs::create_dir_all(mount.join(".kobo")).unwrap();
+    std::fs::write(
+        mount.join(".kobo").join("version"),
+        format!(
+            "{},3.0.35+,4.41.23145,3.0.35+,3.0.35,00000000-0000-0000-0000-000000000382",
+            common::TEST_SERIAL
+        ),
+    )
+    .unwrap();
+
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    app.handle(Event::Tick);
+
+    let screen = rendered(&app);
+    assert!(
+        screen.contains("Connected Kobo:"),
+        "the remounted device must show again:\n{screen}"
+    );
+    assert!(
+        !screen.contains("safe to unplug"),
+        "a remounted device must not still claim to be safe to unplug:\n{screen}"
+    );
 }
 
 #[test]

@@ -167,7 +167,9 @@ pub struct App {
     /// Runs the platform eject command. Swapped out in tests.
     ejector: Ejector,
     /// Outcome of the most recent eject, shown on the screen that asked for
-    /// it and cleared when that screen is left.
+    /// it. Cleared when that screen is left (`go_home`) and also when a
+    /// rescan finds the same device mounted again (`refresh_devices`) — a
+    /// remounted device must never still claim to be "safe to unplug".
     pub last_eject: Option<EjectOutcome>,
 
     // Detection results (kept out of Screen so rescans are cheap).
@@ -318,6 +320,13 @@ impl App {
             None => device::scan(),
         };
         self.last_device_scan = Some(Instant::now());
+        // A device that is mounted again must never sit under "safe to
+        // unplug" from a previous eject.
+        if let Some(outcome) = &self.last_eject {
+            if outcome.ok && self.devices.iter().any(|d| d.mount == outcome.mount) {
+                self.last_eject = None;
+            }
+        }
     }
 
     /// The main menu, in order. Eject only appears while a Kobo is mounted.
@@ -485,7 +494,7 @@ impl App {
                 match self.pending_flow.take() {
                     Some(Flow::Backup | Flow::ConfigureSync) => self.enter_detect(),
                     Some(Flow::Restore) => self.enter_pick_zip(),
-                    None => self.screen = Screen::Home { selected: 0 },
+                    None => self.go_home(),
                 }
             }
             Err(err) => self.fail("Could not save your choice", format!("{err:#}")),
@@ -548,7 +557,7 @@ impl App {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 self.pending_flow = None;
-                self.screen = Screen::Home { selected: 0 };
+                self.go_home();
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 self.screen = Screen::ChooseBackupDir {
