@@ -92,7 +92,7 @@ fn sync_report_ejects_with_e_and_reports_it() {
     key(&mut app, KeyCode::Char('e'));
     assert_eq!(
         calls.lock().unwrap().as_slice(),
-        &[mount.clone()],
+        std::slice::from_ref(&mount),
         "e must eject the device the flow just edited"
     );
     assert!(app.last_eject.as_ref().expect("outcome recorded").ok);
@@ -173,7 +173,10 @@ fn home_eject_calls_the_ejector_and_the_device_disappears() {
     assert!(matches!(app.screen, Screen::Home { selected: 3 }));
     key(&mut app, KeyCode::Enter);
 
-    assert_eq!(calls.lock().unwrap().as_slice(), &[mount.clone()]);
+    assert_eq!(
+        calls.lock().unwrap().as_slice(),
+        std::slice::from_ref(&mount)
+    );
     assert!(app.last_eject.as_ref().expect("outcome recorded").ok);
     assert!(
         !app.home_items().contains(&HomeItem::Eject),
@@ -276,10 +279,7 @@ fn home_renders_both_eject_outcomes() {
         "a failed eject must be visible:\n{screen}"
     );
     assert!(screen.contains("dissenter"), "with the reason:\n{screen}");
-    assert!(
-        screen.contains("still in use"),
-        "and the hint:\n{screen}"
-    );
+    assert!(screen.contains("still in use"), "and the hint:\n{screen}");
 
     app.set_ejector(recording_ejector(calls.clone(), true, true));
     key(&mut app, KeyCode::Enter);

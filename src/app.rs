@@ -309,7 +309,11 @@ impl App {
     /// back to scanning the usual mount roots. `enter_detect` has its own,
     /// unrelated scan-plus-manual-insert logic and is not affected by this.
     fn refresh_devices(&mut self) {
-        self.devices = match self.manual_device.as_deref().and_then(|m| device::probe(m).ok()) {
+        self.devices = match self
+            .manual_device
+            .as_deref()
+            .and_then(|m| device::probe(m).ok())
+        {
             Some(d) => vec![d],
             None => device::scan(),
         };

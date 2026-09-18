@@ -147,7 +147,9 @@ mod tests {
         // run_eject cannot be exercised for a foreign OS, but the message it
         // hands back is the constant the failure path uses.
         let outcome = EjectOutcome::failure(Path::new("/mnt/kobo"), UNSUPPORTED);
-        assert!(outcome.headline().contains("not supported on this platform"));
+        assert!(outcome
+            .headline()
+            .contains("not supported on this platform"));
         assert!(outcome.headline().contains("file manager"));
     }
 }
