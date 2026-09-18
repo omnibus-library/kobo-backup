@@ -11,7 +11,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
-use kobo_backup::app::{App, Ejector, Screen};
+use kobo_backup::app::{App, Ejector, HomeItem, Screen};
 use kobo_backup::eject::EjectOutcome;
 use kobo_backup::event::Event;
 use kobo_backup::{ui, CliArgs};
@@ -136,4 +136,95 @@ fn a_failed_eject_is_reported_not_swallowed() {
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.screen, Screen::Home { .. }));
     assert!(app.last_eject.is_none(), "last_eject must clear on go_home");
+}
+
+#[test]
+fn home_offers_eject_only_while_a_kobo_is_mounted() {
+    let (_guard, mount) = stage_fake_device();
+    let out = tempfile::tempdir().unwrap();
+    let mut app = app_for(&mount, out.path());
+
+    let items = app.home_items();
+    assert_eq!(
+        items.iter().position(|i| *i == HomeItem::Eject),
+        Some(3),
+        "eject must sit after Configure wireless sync so existing indices do not move"
+    );
+    assert_eq!(items.last(), Some(&HomeItem::Quit), "Quit stays last");
+    assert!(app.devices.iter().any(|d| d.mount == mount));
+
+    app.devices.clear();
+    let items = app.home_items();
+    assert!(!items.contains(&HomeItem::Eject));
+    assert_eq!(items.len(), 4);
+}
+
+#[test]
+fn home_eject_calls_the_ejector_and_the_device_disappears() {
+    let (_guard, mount) = stage_fake_device();
+    let out = tempfile::tempdir().unwrap();
+    let mut app = app_for(&mount, out.path());
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    app.set_ejector(recording_ejector(calls.clone(), true, true));
+
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Down);
+    assert!(matches!(app.screen, Screen::Home { selected: 3 }));
+    key(&mut app, KeyCode::Enter);
+
+    assert_eq!(calls.lock().unwrap().as_slice(), &[mount.clone()]);
+    assert!(app.last_eject.as_ref().expect("outcome recorded").ok);
+    assert!(
+        !app.home_items().contains(&HomeItem::Eject),
+        "a device that is gone must not still offer eject"
+    );
+    assert!(matches!(app.screen, Screen::Home { .. }));
+}
+
+#[test]
+fn home_eject_failure_keeps_the_device_listed() {
+    let (_guard, mount) = stage_fake_device();
+    let out = tempfile::tempdir().unwrap();
+    let mut app = app_for(&mount, out.path());
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    app.set_ejector(recording_ejector(calls.clone(), false, false));
+
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Enter);
+
+    let outcome = app.last_eject.as_ref().expect("outcome recorded");
+    assert!(!outcome.ok);
+    assert_eq!(outcome.mount, mount);
+    assert!(
+        app.home_items().contains(&HomeItem::Eject),
+        "a device that refused to eject is still there"
+    );
+}
+
+#[test]
+fn home_rescans_on_a_tick_but_only_once_a_second() {
+    let (_guard, mount) = stage_fake_device();
+    let out = tempfile::tempdir().unwrap();
+    let mut app = app_for(&mount, out.path());
+    assert!(
+        app.devices.iter().any(|d| d.mount == mount),
+        "construction scans for a device"
+    );
+
+    app.devices.clear();
+    app.handle(Event::Tick);
+    assert!(
+        app.devices.is_empty(),
+        "a tick inside the throttle window must not rescan"
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    app.handle(Event::Tick);
+    assert!(
+        app.devices.iter().any(|d| d.mount == mount),
+        "after the throttle window a tick picks the device back up"
+    );
 }
