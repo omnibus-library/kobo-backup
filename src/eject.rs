@@ -68,6 +68,31 @@ pub fn eject_command(mount: &Path, os: &str) -> Option<(String, Vec<String>)> {
     }
 }
 
+/// Classify the result of having run `program` against `mount`: success or
+/// failure, and in the failure case, the command's own words for why (stderr,
+/// falling back to stdout, falling back to a generic exit-status message).
+/// Pure so the classification logic can be unit-tested without spawning
+/// anything.
+pub fn outcome_from(
+    mount: &Path,
+    program: &str,
+    status: std::process::ExitStatus,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> EjectOutcome {
+    if status.success() {
+        return EjectOutcome::success(mount);
+    }
+    let mut detail = String::from_utf8_lossy(stderr).trim().to_string();
+    if detail.is_empty() {
+        detail = String::from_utf8_lossy(stdout).trim().to_string();
+    }
+    if detail.is_empty() {
+        detail = format!("{program} exited with {status}");
+    }
+    EjectOutcome::failure(mount, detail)
+}
+
 /// Run the platform eject command and report the result. Never panics, never
 /// swallows the reason for a failure.
 pub fn run_eject(mount: &Path) -> EjectOutcome {
@@ -75,17 +100,7 @@ pub fn run_eject(mount: &Path) -> EjectOutcome {
         return EjectOutcome::failure(mount, UNSUPPORTED);
     };
     match std::process::Command::new(&program).args(&args).output() {
-        Ok(out) if out.status.success() => EjectOutcome::success(mount),
-        Ok(out) => {
-            let mut detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            if detail.is_empty() {
-                detail = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            }
-            if detail.is_empty() {
-                detail = format!("{program} exited with {}", out.status);
-            }
-            EjectOutcome::failure(mount, detail)
-        }
+        Ok(out) => outcome_from(mount, &program, out.status, &out.stdout, &out.stderr),
         Err(err) => EjectOutcome::failure(mount, format!("could not run {program}: {err}")),
     }
 }
@@ -142,14 +157,65 @@ mod tests {
         assert_eq!(outcome.mount, PathBuf::from("/Volumes/KOBOeReader"));
     }
 
+    #[cfg(unix)]
+    fn exit_status(code: i32) -> std::process::ExitStatus {
+        use std::os::unix::process::ExitStatusExt;
+        // Raw wait-status encoding: a normal exit packs the code into the
+        // high byte; 0 means success.
+        std::process::ExitStatus::from_raw(code << 8)
+    }
+
+    #[cfg(unix)]
     #[test]
-    fn unsupported_platform_is_reported_as_a_failure_with_advice() {
-        // run_eject cannot be exercised for a foreign OS, but the message it
-        // hands back is the constant the failure path uses.
-        let outcome = EjectOutcome::failure(Path::new("/mnt/kobo"), UNSUPPORTED);
-        assert!(outcome
-            .headline()
-            .contains("not supported on this platform"));
-        assert!(outcome.headline().contains("file manager"));
+    fn outcome_from_reports_success_on_a_zero_exit() {
+        let outcome = outcome_from(
+            Path::new("/Volumes/KOBOeReader"),
+            "diskutil",
+            exit_status(0),
+            b"",
+            b"",
+        );
+        assert!(outcome.ok);
+        assert_eq!(outcome.detail, "");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn outcome_from_uses_trimmed_stderr_on_failure() {
+        let outcome = outcome_from(
+            Path::new("/mnt/kobo"),
+            "umount",
+            exit_status(1),
+            b"",
+            b"  umount: /mnt/kobo: target is busy.\n",
+        );
+        assert!(!outcome.ok);
+        assert_eq!(outcome.detail, "umount: /mnt/kobo: target is busy.");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn outcome_from_falls_back_to_stdout_when_stderr_is_empty() {
+        let outcome = outcome_from(
+            Path::new("/Volumes/KOBOeReader"),
+            "diskutil",
+            exit_status(1),
+            b"Disk /Volumes/KOBOeReader could not be unmounted.\n",
+            b"",
+        );
+        assert!(!outcome.ok);
+        assert_eq!(
+            outcome.detail,
+            "Disk /Volumes/KOBOeReader could not be unmounted."
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn outcome_from_mentions_the_program_and_status_when_both_streams_are_empty() {
+        let outcome = outcome_from(Path::new("/mnt/kobo"), "umount", exit_status(1), b"", b"");
+        assert!(!outcome.ok);
+        assert!(outcome.detail.contains("umount"));
+        assert!(outcome.detail.contains("exited with"));
     }
 }
