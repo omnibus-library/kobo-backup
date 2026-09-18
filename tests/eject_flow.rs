@@ -96,6 +96,16 @@ fn sync_report_ejects_with_e_and_reports_it() {
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.screen, Screen::SyncEndpointReport));
 
+    let screen = rendered(&app);
+    assert!(
+        screen.contains("press e"),
+        "the done screen must say how to eject:\n{screen}"
+    );
+    assert!(
+        screen.contains("eject device"),
+        "and advertise it in the footer:\n{screen}"
+    );
+
     key(&mut app, KeyCode::Char('e'));
     assert_eq!(
         calls.lock().unwrap().as_slice(),
@@ -382,32 +392,4 @@ fn home_renders_both_eject_outcomes() {
     );
     assert!(screen.contains("safe to unplug"));
     assert!(screen.contains("No Kobo connected"));
-}
-
-#[test]
-fn sync_report_advertises_the_eject_key() {
-    let (guard, mount) = stage_fake_device();
-    std::env::set_var("KOBO_BACKUP_CONF_EDIT_DIR", guard.path().join("conf-edits"));
-    let out = tempfile::tempdir().unwrap();
-    let mut app = app_for(&mount, out.path());
-
-    key(&mut app, KeyCode::Down);
-    key(&mut app, KeyCode::Down);
-    key(&mut app, KeyCode::Enter);
-    key(&mut app, KeyCode::Enter);
-    type_str(&mut app, "https://omni.example.com/kobo/tok123");
-    key(&mut app, KeyCode::Enter);
-    key(&mut app, KeyCode::Tab);
-    key(&mut app, KeyCode::Enter);
-    assert!(matches!(app.screen, Screen::SyncEndpointReport));
-
-    let screen = rendered(&app);
-    assert!(
-        screen.contains("press e"),
-        "the done screen must say how to eject:\n{screen}"
-    );
-    assert!(
-        screen.contains("eject device"),
-        "and advertise it in the footer:\n{screen}"
-    );
 }
