@@ -57,6 +57,9 @@ malformed lines are ignored rather than fatal — a bad config must never stand
 between you and your backups. Press `c` at the main menu to change the folder
 at any time; the menu always shows the current location and where the setting
 came from.
+The menu also names the Kobo it can see right now, and offers **Eject my Kobo**
+while one is mounted — the result of the eject, success or failure, is printed
+there rather than silently swallowed.
 
 ## What a backup contains
 
@@ -125,6 +128,9 @@ main menu does that edit for you, with the same discipline as a restore:
    `~/.kobo-backup/conf-edits/<serial>-<timestamp>/` first, so the change is always
    undoable; the new file is written to a temp name, renamed into place, and the
    value is re-read from the device to verify it landed.
+4. Eject the Kobo from the done screen (press `e`) before unplugging it. If the
+   eject fails, the screen says why (usually another program is still inside the
+   volume) instead of leaving you guessing.
 
 Only that one file is touched — books, annotations, and databases are not. To undo,
 copy the saved conf back onto the device (or run the flow again with the old URL).
