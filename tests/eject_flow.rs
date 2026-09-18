@@ -228,3 +228,94 @@ fn home_rescans_on_a_tick_but_only_once_a_second() {
         "after the throttle window a tick picks the device back up"
     );
 }
+
+#[test]
+fn home_shows_the_connected_device_and_hides_the_line_when_it_is_gone() {
+    let (_guard, mount) = stage_fake_device();
+    let out = tempfile::tempdir().unwrap();
+    let mut app = app_for(&mount, out.path());
+
+    let screen = rendered(&app);
+    assert!(
+        screen.contains("Eject my Kobo"),
+        "the eject item must be visible:\n{screen}"
+    );
+    assert!(
+        screen.contains(common::TEST_SERIAL),
+        "the device line must name the serial:\n{screen}"
+    );
+    assert!(
+        screen.contains("KOBOeReader"),
+        "the device line must name the mount:\n{screen}"
+    );
+
+    app.devices.clear();
+    let screen = rendered(&app);
+    assert!(
+        screen.contains("No Kobo connected"),
+        "an empty menu must say so:\n{screen}"
+    );
+    assert!(!screen.contains("Eject my Kobo"));
+}
+
+#[test]
+fn home_renders_both_eject_outcomes() {
+    let (_guard, mount) = stage_fake_device();
+    let out = tempfile::tempdir().unwrap();
+    let mut app = app_for(&mount, out.path());
+    let calls = Arc::new(Mutex::new(Vec::new()));
+
+    app.set_ejector(recording_ejector(calls.clone(), false, false));
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Enter);
+    let screen = rendered(&app);
+    assert!(
+        screen.contains("✗ Could not eject"),
+        "a failed eject must be visible:\n{screen}"
+    );
+    assert!(screen.contains("dissenter"), "with the reason:\n{screen}");
+    assert!(
+        screen.contains("still in use"),
+        "and the hint:\n{screen}"
+    );
+
+    app.set_ejector(recording_ejector(calls.clone(), true, true));
+    key(&mut app, KeyCode::Enter);
+    let screen = rendered(&app);
+    assert!(
+        screen.contains("✓ Ejected"),
+        "a successful eject must be visible:\n{screen}"
+    );
+    assert!(screen.contains("safe to unplug"));
+    assert!(screen.contains("No Kobo connected"));
+}
+
+#[test]
+fn sync_report_advertises_the_eject_key() {
+    let (guard, mount) = stage_fake_device();
+    std::env::set_var("KOBO_BACKUP_CONF_EDIT_DIR", guard.path().join("conf-edits"));
+    let out = tempfile::tempdir().unwrap();
+    let mut app = app_for(&mount, out.path());
+
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Enter);
+    key(&mut app, KeyCode::Enter);
+    type_str(&mut app, "https://omni.example.com/kobo/tok123");
+    key(&mut app, KeyCode::Enter);
+    key(&mut app, KeyCode::Tab);
+    key(&mut app, KeyCode::Enter);
+    assert!(matches!(app.screen, Screen::SyncEndpointReport));
+
+    let screen = rendered(&app);
+    assert!(
+        screen.contains("press e"),
+        "the done screen must say how to eject:\n{screen}"
+    );
+    assert!(
+        screen.contains("eject device"),
+        "and advertise it in the footer:\n{screen}"
+    );
+}
