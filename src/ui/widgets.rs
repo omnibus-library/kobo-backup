@@ -71,22 +71,27 @@ pub fn safety_line(f: &mut Frame, area: Rect, text: &str, color: Color) {
 /// that can trigger one.
 pub fn eject_lines(outcome: &crate::eject::EjectOutcome) -> Vec<Line<'static>> {
     if outcome.ok {
-        vec![Line::from(Span::styled(
+        return vec![Line::from(Span::styled(
             outcome.headline(),
             Style::default().fg(OK).bold(),
-        ))]
-    } else {
-        vec![
-            Line::from(Span::styled(
-                outcome.headline(),
-                Style::default().fg(DANGER).bold(),
-            )),
-            Line::from(Span::styled(
-                crate::eject::BUSY_HINT,
-                Style::default().fg(DIM),
-            )),
-        ]
+        ))];
     }
+    let mut lines = vec![Line::from(Span::styled(
+        outcome.headline(),
+        Style::default().fg(DANGER).bold(),
+    ))];
+    // The busy hint only makes sense when the eject command itself refused —
+    // not when this platform has no eject command, or the command could not
+    // even be run.
+    let refused = outcome.detail != crate::eject::UNSUPPORTED
+        && !outcome.detail.starts_with("could not run ");
+    if refused {
+        lines.push(Line::from(Span::styled(
+            crate::eject::BUSY_HINT,
+            Style::default().fg(DIM),
+        )));
+    }
+    lines
 }
 
 /// Two-button confirm selector. `proceed_selected == false` means Abort is
@@ -363,4 +368,29 @@ pub fn padded(area: Rect, horizontal: u16) -> Rect {
         Constraint::Length(horizontal),
     ])
     .split(area)[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::eject::{EjectOutcome, UNSUPPORTED};
+    use std::path::Path;
+
+    #[test]
+    fn eject_lines_omits_the_busy_hint_for_an_unsupported_platform() {
+        let outcome = EjectOutcome::failure(Path::new("/mnt/kobo"), UNSUPPORTED);
+        let lines = eject_lines(&outcome);
+        assert_eq!(lines.len(), 1);
+        let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(!text.contains("still in use"));
+    }
+
+    #[test]
+    fn eject_lines_includes_the_busy_hint_for_a_command_refusal() {
+        let outcome = EjectOutcome::failure(Path::new("/mnt/kobo"), "Unmount failed: dissenter");
+        let lines = eject_lines(&outcome);
+        assert_eq!(lines.len(), 2);
+        let text: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("still in use"));
+    }
 }
