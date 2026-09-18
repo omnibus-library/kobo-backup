@@ -1482,6 +1482,10 @@ pub fn sync_endpoint_report(f: &mut Frame, app: &App) {
              sync against a new server can affect on-device annotations.",
         ),
     ]);
+    if let Some(outcome) = &app.last_eject {
+        lines.push(Line::raw(""));
+        lines.extend(widgets::eject_lines(outcome));
+    }
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
 
     widgets::safety_line(

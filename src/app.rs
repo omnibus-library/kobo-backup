@@ -8,6 +8,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::archive;
 use crate::config;
 use crate::device::{self, Device};
+use crate::eject::{self, EjectOutcome};
 use crate::event::{Event, Events};
 use crate::insights::{self, LibraryInsights};
 use crate::inventory::{self, Inventory};
@@ -21,6 +22,10 @@ use crate::CliArgs;
 
 pub const SERIAL_OVERRIDE_PHRASE: &str = "DIFFERENT DEVICE";
 pub const RESTORE_PHRASE: &str = "RESTORE";
+
+/// How the app ejects a device. Boxed so tests can swap in a recorder instead
+/// of shelling out to `diskutil`.
+pub type Ejector = Box<dyn Fn(&std::path::Path) -> EjectOutcome>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Flow {
@@ -133,6 +138,11 @@ pub struct App {
     /// Path the chosen backup location is persisted to.
     pub config_path: PathBuf,
     pub manual_device: Option<PathBuf>,
+    /// Runs the platform eject command. Swapped out in tests.
+    ejector: Ejector,
+    /// Outcome of the most recent eject, shown on the screen that asked for
+    /// it and cleared when that screen is left.
+    pub last_eject: Option<EjectOutcome>,
 
     // Detection results (kept out of Screen so rescans are cheap).
     pub devices: Vec<Device>,
@@ -205,6 +215,8 @@ impl App {
             out_dir_source: resolution.source,
             pending_flow: None,
             manual_device: args.device.clone(),
+            ejector: Box::new(eject::run_eject),
+            last_eject: None,
             devices: Vec::new(),
             stale_partials,
             worker: None,
@@ -234,6 +246,11 @@ impl App {
 
     pub fn worker_running(&self) -> bool {
         self.worker.is_some()
+    }
+
+    /// Replace the eject implementation (tests inject a recorder).
+    pub fn set_ejector(&mut self, ejector: Ejector) {
+        self.ejector = ejector;
     }
 
     // ---------------------------------------------------------------- events
@@ -669,8 +686,10 @@ impl App {
     }
 
     fn key_sync_report(&mut self, key: KeyEvent) {
-        if matches!(key.code, KeyCode::Enter | KeyCode::Esc | KeyCode::Char('q')) {
-            self.go_home();
+        match key.code {
+            KeyCode::Char('e') => self.eject_device(),
+            KeyCode::Enter | KeyCode::Esc | KeyCode::Char('q') => self.go_home(),
+            _ => {}
         }
     }
 
@@ -1385,6 +1404,7 @@ impl App {
 
     fn go_home(&mut self) {
         self.stale_partials = find_stale_partials(&self.out_dir);
+        self.last_eject = None;
         self.screen = Screen::Home { selected: 0 };
     }
 
@@ -1413,6 +1433,7 @@ impl App {
         self.sync_current = None;
         self.sync_candidate = None;
         self.sync_outcome = None;
+        self.last_eject = None;
         self.progress = ProgressUpdate::default();
         self.progress_started = None;
     }
@@ -1456,15 +1477,30 @@ impl App {
         }
     }
 
-    fn eject_device(&mut self) {
-        if let Some(device) = &self.device {
-            if cfg!(target_os = "macos") {
-                let _ = std::process::Command::new("diskutil")
-                    .arg("eject")
-                    .arg(&device.mount)
-                    .output();
-            }
+    /// Which device an eject on the current screen applies to. Home ejects
+    /// what is mounted right now; a flow screen ejects the device that flow
+    /// worked on.
+    fn eject_target(&self) -> Option<PathBuf> {
+        match self.screen {
+            Screen::Home { .. } => self.devices.first().map(|d| d.mount.clone()),
+            _ => self.device.as_ref().map(|d| d.mount.clone()),
         }
+    }
+
+    /// Eject, then say what happened — success or failure, in the command's
+    /// own words.
+    fn eject_device(&mut self) {
+        let Some(mount) = self.eject_target() else {
+            return;
+        };
+        let outcome = (self.ejector)(&mount);
+        if outcome.ok {
+            if self.device.as_ref().is_some_and(|d| d.mount == mount) {
+                self.device = None;
+            }
+            self.devices.retain(|d| d.mount != mount);
+        }
+        self.last_eject = Some(outcome);
     }
 }
 

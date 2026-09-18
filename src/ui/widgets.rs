@@ -67,6 +67,28 @@ pub fn safety_line(f: &mut Frame, area: Rect, text: &str, color: Color) {
     );
 }
 
+/// The result of the last eject attempt — the same words on every screen
+/// that can trigger one.
+pub fn eject_lines(outcome: &crate::eject::EjectOutcome) -> Vec<Line<'static>> {
+    if outcome.ok {
+        vec![Line::from(Span::styled(
+            outcome.headline(),
+            Style::default().fg(OK).bold(),
+        ))]
+    } else {
+        vec![
+            Line::from(Span::styled(
+                outcome.headline(),
+                Style::default().fg(DANGER).bold(),
+            )),
+            Line::from(Span::styled(
+                crate::eject::BUSY_HINT,
+                Style::default().fg(DIM),
+            )),
+        ]
+    }
+}
+
 /// Two-button confirm selector. `proceed_selected == false` means Abort is
 /// focused — always the default, so Enter-mashing cannot pass a gate.
 pub fn confirm_bar(
