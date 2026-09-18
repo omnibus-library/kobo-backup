@@ -425,14 +425,28 @@ impl App {
             }
             KeyCode::Char('c') => self.enter_choose_backup_dir(None),
             // A device pulled out between the last rescan and this keypress
-            // shrinks the list; fall back to the harmless last item.
-            KeyCode::Enter => match items.get(selected).copied().unwrap_or(HomeItem::Quit) {
-                HomeItem::Backup => self.start_flow(Flow::Backup),
-                HomeItem::Restore => self.start_flow(Flow::Restore),
-                HomeItem::ConfigureSync => self.start_flow(Flow::ConfigureSync),
-                HomeItem::Eject => self.eject_device(),
-                HomeItem::Quit => self.should_quit = true,
-            },
+            // shrinks the list; a stale index must never fall through to
+            // Quit — do nothing rather than guess.
+            KeyCode::Enter => {
+                let Some(item) = items.get(selected).copied() else {
+                    return;
+                };
+                match item {
+                    HomeItem::Backup => self.start_flow(Flow::Backup),
+                    HomeItem::Restore => self.start_flow(Flow::Restore),
+                    HomeItem::ConfigureSync => self.start_flow(Flow::ConfigureSync),
+                    HomeItem::Eject => {
+                        self.eject_device();
+                        // Ejecting can remove the Eject row itself; keep the
+                        // cursor on a real item and never let it slide onto
+                        // Quit as a side effect of the menu shrinking.
+                        let new_items = self.home_items();
+                        let selected = selected.min(new_items.len().saturating_sub(2));
+                        self.screen = Screen::Home { selected };
+                    }
+                    HomeItem::Quit => self.should_quit = true,
+                }
+            }
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
             _ => {}
         }

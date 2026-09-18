@@ -262,6 +262,19 @@ fn home_eject_calls_the_ejector_and_the_device_disappears() {
         "a device that is gone must not still offer eject"
     );
     assert!(matches!(app.screen, Screen::Home { .. }));
+
+    let items = app.home_items();
+    if let Screen::Home { selected } = app.screen {
+        assert!(
+            selected < items.len(),
+            "selection must stay within the shrunk menu"
+        );
+    }
+    key(&mut app, KeyCode::Enter);
+    assert!(
+        !app.should_quit,
+        "a stray Enter right after ejecting must not quit the app"
+    );
 }
 
 #[test]
