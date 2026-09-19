@@ -73,7 +73,7 @@ pub fn eject_command(mount: &Path, os: &str) -> Option<(String, Vec<String>)> {
 /// falling back to stdout, falling back to a generic exit-status message).
 /// Pure so the classification logic can be unit-tested without spawning
 /// anything.
-pub fn outcome_from(
+fn outcome_from(
     mount: &Path,
     program: &str,
     status: std::process::ExitStatus,
