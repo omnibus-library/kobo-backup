@@ -477,3 +477,37 @@ fn home_renders_both_eject_outcomes() {
     assert!(screen.contains("safe to unplug"));
     assert!(screen.contains("No Kobo connected"));
 }
+
+#[test]
+fn a_failed_eject_line_clears_when_the_device_is_unplugged() {
+    let (_guard, mount) = stage_fake_device();
+    let out = tempfile::tempdir().unwrap();
+    let mut app = app_for(&mount, out.path());
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    app.set_ejector(recording_ejector(calls.clone(), false, false));
+
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Enter);
+    let screen = rendered(&app);
+    assert!(
+        screen.contains("Could not eject"),
+        "the failure must render before the unplug:\n{screen}"
+    );
+
+    // Unplugged for real, without ever successfully ejecting through the UI.
+    std::fs::remove_dir_all(mount.join(".kobo")).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    app.handle(Event::Tick);
+
+    let screen = rendered(&app);
+    assert!(
+        screen.contains("No Kobo connected"),
+        "the device must show as gone:\n{screen}"
+    );
+    assert!(
+        !screen.contains("Could not eject"),
+        "a stale failure line must not outlive the device it was about:\n{screen}"
+    );
+}
