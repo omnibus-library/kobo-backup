@@ -2,6 +2,7 @@ pub mod app;
 pub mod archive;
 pub mod config;
 pub mod device;
+pub mod eject;
 pub mod event;
 pub mod insights;
 pub mod inventory;

@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use crossbeam_channel::Sender;
@@ -8,6 +8,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::archive;
 use crate::config;
 use crate::device::{self, Device};
+use crate::eject::{self, EjectOutcome};
 use crate::event::{Event, Events};
 use crate::insights::{self, LibraryInsights};
 use crate::inventory::{self, Inventory};
@@ -22,6 +23,9 @@ use crate::CliArgs;
 pub const SERIAL_OVERRIDE_PHRASE: &str = "DIFFERENT DEVICE";
 pub const RESTORE_PHRASE: &str = "RESTORE";
 
+/// How the app ejects a device; boxed so tests can swap in a recorder.
+pub type Ejector = Box<dyn Fn(&std::path::Path) -> EjectOutcome>;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Flow {
     Backup,
@@ -30,6 +34,31 @@ pub enum Flow {
     /// `api_endpoint` in `Kobo eReader.conf`.
     ConfigureSync,
 }
+
+/// A row on the main menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HomeItem {
+    Backup,
+    Restore,
+    ConfigureSync,
+    Eject,
+    Quit,
+}
+
+impl HomeItem {
+    pub fn label(self) -> &'static str {
+        match self {
+            HomeItem::Backup => "Back up my Kobo",
+            HomeItem::Restore => "Restore my Kobo",
+            HomeItem::ConfigureSync => "Configure wireless sync",
+            HomeItem::Eject => "Eject my Kobo",
+            HomeItem::Quit => "Quit",
+        }
+    }
+}
+
+/// How often Home looks for a device appearing or vanishing.
+const HOME_RESCAN_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Which screen is on. Payload-light: shared data lives on `App`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,10 +162,14 @@ pub struct App {
     /// Path the chosen backup location is persisted to.
     pub config_path: PathBuf,
     pub manual_device: Option<PathBuf>,
+    ejector: Ejector,
+    /// Outcome of the most recent eject. Cleared on `go_home` and on remount.
+    pub last_eject: Option<EjectOutcome>,
 
     // Detection results (kept out of Screen so rescans are cheap).
     pub devices: Vec<Device>,
     pub stale_partials: Vec<PathBuf>,
+    last_device_scan: Option<Instant>,
 
     // Worker state.
     worker: Option<WorkerHandle>,
@@ -196,7 +229,7 @@ impl App {
         config_path: PathBuf,
     ) -> Self {
         let stale_partials = find_stale_partials(&resolution.dir);
-        App {
+        let mut app = App {
             config_path,
             screen: Screen::Home { selected: 0 },
             flow: Flow::Backup,
@@ -205,8 +238,11 @@ impl App {
             out_dir_source: resolution.source,
             pending_flow: None,
             manual_device: args.device.clone(),
+            ejector: Box::new(eject::run_eject),
+            last_eject: None,
             devices: Vec::new(),
             stale_partials,
+            last_device_scan: None,
             worker: None,
             tx,
             progress: ProgressUpdate::default(),
@@ -229,11 +265,111 @@ impl App {
             sync_current: None,
             sync_candidate: None,
             sync_outcome: None,
-        }
+        };
+        app.refresh_devices();
+        app
     }
 
     pub fn worker_running(&self) -> bool {
         self.worker.is_some()
+    }
+
+    /// Replace the eject implementation (tests inject a recorder).
+    pub fn set_ejector(&mut self, ejector: Ejector) {
+        self.ejector = ejector;
+    }
+
+    /// Rescan Home, or reconcile a stale eject line on a report screen.
+    fn on_tick(&mut self) {
+        match self.screen {
+            Screen::Home { .. } => {
+                if self.rescan_due() {
+                    self.refresh_devices();
+                }
+            }
+            Screen::BackupReport { .. }
+            | Screen::RestoreReport { .. }
+            | Screen::SyncEndpointReport
+                if self.last_eject.is_some() && self.rescan_due() =>
+            {
+                self.reconcile_report_eject();
+            }
+            _ => {}
+        }
+    }
+
+    fn rescan_due(&self) -> bool {
+        match self.last_device_scan {
+            Some(at) => at.elapsed() >= HOME_RESCAN_INTERVAL,
+            None => true,
+        }
+    }
+
+    /// Clears `last_eject` once presence matches it: remounted after success, gone after failure.
+    fn reconcile_eject_outcome(&mut self, present: bool) {
+        if let Some(outcome) = &self.last_eject {
+            if outcome.ok == present {
+                self.last_eject = None;
+            }
+        }
+    }
+
+    fn reconcile_report_eject(&mut self) {
+        self.last_device_scan = Some(Instant::now());
+        let present = self
+            .last_eject
+            .as_ref()
+            .map(|outcome| outcome.mount.join(".kobo").is_dir());
+        if let Some(present) = present {
+            self.reconcile_eject_outcome(present);
+        }
+    }
+
+    /// Refresh `devices` for Home. A `--device` is probed directly and never
+    /// falls back to scanning, so a dead named device is never swapped for a different Kobo.
+    fn refresh_devices(&mut self) {
+        let items_before = self.home_items().len();
+        self.devices = match &self.manual_device {
+            Some(m) => device::probe(m).ok().into_iter().collect(),
+            None => device::scan(),
+        };
+        self.last_device_scan = Some(Instant::now());
+        let present = self
+            .last_eject
+            .as_ref()
+            .map(|outcome| self.devices.iter().any(|d| d.mount == outcome.mount));
+        if let Some(present) = present {
+            self.reconcile_eject_outcome(present);
+        }
+        if self.home_items().len() < items_before {
+            self.clamp_home_selection(items_before);
+        }
+    }
+
+    /// Keeps the cursor off Quit after a shrink, unless it was parked there already.
+    fn clamp_home_selection(&mut self, items_before: usize) {
+        if let Screen::Home { selected } = self.screen {
+            let len = self.home_items().len();
+            if selected == items_before.saturating_sub(1) {
+                self.screen = Screen::Home {
+                    selected: len.saturating_sub(1),
+                };
+            } else if selected + 1 >= len {
+                self.screen = Screen::Home {
+                    selected: len.saturating_sub(2),
+                };
+            }
+        }
+    }
+
+    /// The main menu, in order. Eject only appears while a Kobo is mounted.
+    pub fn home_items(&self) -> Vec<HomeItem> {
+        let mut items = vec![HomeItem::Backup, HomeItem::Restore, HomeItem::ConfigureSync];
+        if !self.devices.is_empty() {
+            items.push(HomeItem::Eject);
+        }
+        items.push(HomeItem::Quit);
+        items
     }
 
     // ---------------------------------------------------------------- events
@@ -242,7 +378,8 @@ impl App {
         match event {
             Event::Key(key) => self.handle_key(key),
             Event::Worker(msg) => self.handle_worker(msg),
-            Event::Tick | Event::Resize => {}
+            Event::Tick => self.on_tick(),
+            Event::Resize => {}
         }
     }
 
@@ -301,7 +438,7 @@ impl App {
     // ------------------------------------------------------------- per screen
 
     fn key_home(&mut self, key: KeyEvent, selected: usize) {
-        const ITEMS: usize = 4;
+        let items = self.home_items();
         match key.code {
             KeyCode::Up | KeyCode::Char('k') => {
                 self.screen = Screen::Home {
@@ -310,7 +447,7 @@ impl App {
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 self.screen = Screen::Home {
-                    selected: (selected + 1).min(ITEMS - 1),
+                    selected: (selected + 1).min(items.len() - 1),
                 }
             }
             KeyCode::Char('d') if !self.stale_partials.is_empty() => {
@@ -320,12 +457,23 @@ impl App {
                 self.stale_partials.clear();
             }
             KeyCode::Char('c') => self.enter_choose_backup_dir(None),
-            KeyCode::Enter => match selected {
-                0 => self.start_flow(Flow::Backup),
-                1 => self.start_flow(Flow::Restore),
-                2 => self.start_flow(Flow::ConfigureSync),
-                _ => self.should_quit = true,
-            },
+            // A stale index (device unplugged since the last rescan) does nothing rather than guess.
+            KeyCode::Enter => {
+                let Some(item) = items.get(selected).copied() else {
+                    return;
+                };
+                match item {
+                    HomeItem::Backup => self.start_flow(Flow::Backup),
+                    HomeItem::Restore => self.start_flow(Flow::Restore),
+                    HomeItem::ConfigureSync => self.start_flow(Flow::ConfigureSync),
+                    HomeItem::Eject => {
+                        let items_before = items.len();
+                        self.eject_device();
+                        self.clamp_home_selection(items_before);
+                    }
+                    HomeItem::Quit => self.should_quit = true,
+                }
+            }
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
             _ => {}
         }
@@ -387,7 +535,7 @@ impl App {
                 match self.pending_flow.take() {
                     Some(Flow::Backup | Flow::ConfigureSync) => self.enter_detect(),
                     Some(Flow::Restore) => self.enter_pick_zip(),
-                    None => self.screen = Screen::Home { selected: 0 },
+                    None => self.go_home(),
                 }
             }
             Err(err) => self.fail("Could not save your choice", format!("{err:#}")),
@@ -450,7 +598,7 @@ impl App {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 self.pending_flow = None;
-                self.screen = Screen::Home { selected: 0 };
+                self.go_home();
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 self.screen = Screen::ChooseBackupDir {
@@ -669,8 +817,10 @@ impl App {
     }
 
     fn key_sync_report(&mut self, key: KeyEvent) {
-        if matches!(key.code, KeyCode::Enter | KeyCode::Esc | KeyCode::Char('q')) {
-            self.go_home();
+        match key.code {
+            KeyCode::Char('e') => self.eject_device(),
+            KeyCode::Enter | KeyCode::Esc | KeyCode::Char('q') => self.go_home(),
+            _ => {}
         }
     }
 
@@ -1385,6 +1535,8 @@ impl App {
 
     fn go_home(&mut self) {
         self.stale_partials = find_stale_partials(&self.out_dir);
+        self.last_eject = None;
+        self.refresh_devices();
         self.screen = Screen::Home { selected: 0 };
     }
 
@@ -1413,6 +1565,7 @@ impl App {
         self.sync_current = None;
         self.sync_candidate = None;
         self.sync_outcome = None;
+        self.last_eject = None;
         self.progress = ProgressUpdate::default();
         self.progress_started = None;
     }
@@ -1456,15 +1609,25 @@ impl App {
         }
     }
 
-    fn eject_device(&mut self) {
-        if let Some(device) = &self.device {
-            if cfg!(target_os = "macos") {
-                let _ = std::process::Command::new("diskutil")
-                    .arg("eject")
-                    .arg(&device.mount)
-                    .output();
-            }
+    fn eject_target(&self) -> Option<PathBuf> {
+        match self.screen {
+            Screen::Home { .. } => self.devices.first().map(|d| d.mount.clone()),
+            _ => self.device.as_ref().map(|d| d.mount.clone()),
         }
+    }
+
+    fn eject_device(&mut self) {
+        let Some(mount) = self.eject_target() else {
+            return;
+        };
+        let outcome = (self.ejector)(&mount);
+        if outcome.ok {
+            if self.device.as_ref().is_some_and(|d| d.mount == mount) {
+                self.device = None;
+            }
+            self.devices.retain(|d| d.mount != mount);
+        }
+        self.last_eject = Some(outcome);
     }
 }
 

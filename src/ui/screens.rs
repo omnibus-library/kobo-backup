@@ -34,17 +34,21 @@ pub fn home(f: &mut Frame, app: &App, selected: usize) {
     widgets::title_bar(f, chrome.title, "KOBO BACKUP", None);
 
     let body = widgets::padded(chrome.body, 4);
-    let rows = Layout::vertical([
-        Constraint::Length(6),
-        Constraint::Length(1),
-        Constraint::Length(2),
-        Constraint::Length(2),
-        Constraint::Length(2),
-        Constraint::Length(2),
-        Constraint::Length(2),
-        Constraint::Min(0),
-    ])
-    .split(body);
+    let items = app.home_items();
+    // The intro (and its spacer) is dropped first on a short terminal so the notes area
+    // never gets squeezed out by ratatui splitting a shortfall evenly across every row.
+    let fixed = 1 + 2 * items.len() + 1; // leading spacer, menu rows, trailing spacer
+    let short = body.height < fixed as u16 + 6 + 6;
+    let (intro_len, spacer_len) = if short { (0, 0) } else { (6, 1) };
+    let menu_row_len = if short { 1 } else { 2 };
+    let mut constraints = vec![
+        Constraint::Length(intro_len),
+        Constraint::Length(spacer_len),
+    ];
+    constraints.extend(vec![Constraint::Length(menu_row_len); items.len()]);
+    constraints.push(Constraint::Length(1));
+    constraints.push(Constraint::Min(0));
+    let rows = Layout::vertical(constraints).split(body);
 
     let intro = Paragraph::new(vec![
         Line::raw(""),
@@ -60,12 +64,6 @@ pub fn home(f: &mut Frame, app: &App, selected: usize) {
     .wrap(Wrap { trim: true });
     f.render_widget(intro, rows[0]);
 
-    let items = [
-        "Back up my Kobo",
-        "Restore my Kobo",
-        "Configure wireless sync",
-        "Quit",
-    ];
     for (i, item) in items.iter().enumerate() {
         let style = if i == selected {
             Style::default().fg(Color::Black).bg(ACCENT).bold()
@@ -75,14 +73,35 @@ pub fn home(f: &mut Frame, app: &App, selected: usize) {
         let prefix = if i == selected { " ▸ " } else { "   " };
         f.render_widget(
             Paragraph::new(Line::from(vec![Span::styled(
-                format!("{prefix}{item}  "),
+                format!("{prefix}{}  ", item.label()),
                 style,
             )])),
             rows[2 + i],
         );
     }
 
-    let mut notes = vec![Line::from(vec![
+    let mut notes = match app.devices.first() {
+        Some(device) => vec![Line::from(vec![
+            Span::styled("Connected Kobo: ", Style::default().fg(DIM)),
+            Span::styled(
+                format!("{}  ", device.identity.model_name),
+                Style::default().fg(Color::White).bold(),
+            ),
+            Span::styled(
+                format!("{}  ", device.identity.serial),
+                Style::default().fg(Color::Gray),
+            ),
+            Span::styled(
+                device.mount.display().to_string(),
+                Style::default().fg(Color::Gray),
+            ),
+        ])],
+        None => vec![Line::from(Span::styled(
+            "No Kobo connected",
+            Style::default().fg(DIM),
+        ))],
+    };
+    notes.push(Line::from(vec![
         Span::styled("Backups folder: ", Style::default().fg(DIM)),
         Span::styled(
             app.out_dir.display().to_string(),
@@ -93,7 +112,7 @@ pub fn home(f: &mut Frame, app: &App, selected: usize) {
             Style::default().fg(DIM),
         ),
         Span::styled("— press c to change", Style::default().fg(DIM)),
-    ])];
+    ]));
     if !app.stale_partials.is_empty() {
         notes.push(Line::from(Span::styled(
             format!(
@@ -104,7 +123,11 @@ pub fn home(f: &mut Frame, app: &App, selected: usize) {
             Style::default().fg(WARN),
         )));
     }
-    f.render_widget(Paragraph::new(notes).wrap(Wrap { trim: true }), rows[6]);
+    if let Some(outcome) = &app.last_eject {
+        notes.extend(widgets::eject_lines(outcome));
+    }
+    let notes_row = rows[rows.len() - 1];
+    f.render_widget(Paragraph::new(notes).wrap(Wrap { trim: true }), notes_row);
 
     widgets::safety_line(
         f,
@@ -628,6 +651,10 @@ pub fn backup_report(f: &mut Frame, app: &App, scroll: u16) {
              Re-run the backup; if it fails again, check the disk you are backing up to."
                 .fg(Color::Gray),
         ));
+    }
+    if let Some(outcome) = &app.last_eject {
+        lines.push(Line::raw(""));
+        lines.extend(widgets::eject_lines(outcome));
     }
     boxed(f, body, "Checks", lines, scroll);
 
@@ -1304,6 +1331,10 @@ pub fn restore_report(f: &mut Frame, app: &App, scroll: u16) {
                 .bold(),
         ));
     }
+    if let Some(outcome) = &app.last_eject {
+        lines.push(Line::raw(""));
+        lines.extend(widgets::eject_lines(outcome));
+    }
     boxed(f, body, "Restore report", lines, scroll);
 
     let (text, color) = if report.passed() {
@@ -1475,13 +1506,17 @@ pub fn sync_endpoint_report(f: &mut Frame, app: &App) {
     lines.extend([
         Line::raw(""),
         Line::from("Next steps".fg(ACCENT).bold()),
-        Line::from("  1. Eject the Kobo safely, then unplug it."),
+        Line::from("  1. Eject the Kobo safely (press e), then unplug it."),
         Line::from("  2. On the device, tap Sync — it now talks to your server."),
         Line::from(
             "  3. If the server is brand new to this device, back up first: the first \
              sync against a new server can affect on-device annotations.",
         ),
     ]);
+    if let Some(outcome) = &app.last_eject {
+        lines.push(Line::raw(""));
+        lines.extend(widgets::eject_lines(outcome));
+    }
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
 
     widgets::safety_line(
@@ -1490,7 +1525,11 @@ pub fn sync_endpoint_report(f: &mut Frame, app: &App) {
         "The new value was read back from the device after writing.",
         OK,
     );
-    widgets::footer(f, chrome.footer, &[("Enter", "home")]);
+    widgets::footer(
+        f,
+        chrome.footer,
+        &[("Enter", "home"), ("e", "eject device")],
+    );
 }
 
 // -------------------------------------------------------------------- error

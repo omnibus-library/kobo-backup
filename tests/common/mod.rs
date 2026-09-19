@@ -9,6 +9,18 @@ use tempfile::TempDir;
 
 pub const TEST_SERIAL: &str = "N000TESTSERIAL";
 
+/// The whole terminal buffer as plain text, one string per row.
+pub fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
+    (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol().to_string())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Build a miniature but structurally faithful Kobo volume in a temp dir.
 /// Returns the guard and the mount path.
 pub fn stage_fake_device() -> (TempDir, PathBuf) {
