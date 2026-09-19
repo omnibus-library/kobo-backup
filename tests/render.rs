@@ -11,6 +11,7 @@ use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
 use kobo_backup::app::{App, Screen, RESTORE_PHRASE};
+use kobo_backup::eject::EjectOutcome;
 use kobo_backup::event::Event;
 use kobo_backup::ui;
 use kobo_backup::CliArgs;
@@ -58,6 +59,20 @@ impl Harness {
         self.app
             .handle(Event::Key(KeyEvent::new(code, KeyModifiers::NONE)));
         self.draw();
+    }
+
+    /// The current frame as plain text, for content assertions beyond "not
+    /// blank".
+    fn buffer_text(&self) -> String {
+        let buffer = self.terminal.backend().buffer();
+        (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     fn type_str(&mut self, s: &str) {
@@ -125,6 +140,12 @@ fn every_screen_renders_through_both_flows() {
     h.pump_until("backup report", |a| {
         matches!(a.screen, Screen::BackupReport { .. })
     });
+    h.app.set_ejector(Box::new(EjectOutcome::success));
+    h.key(KeyCode::Char('e'));
+    assert!(
+        h.buffer_text().contains("safe to unplug"),
+        "the backup report must show the eject outcome"
+    );
     h.key(KeyCode::Enter); // Home
 
     // Mutate device so the restore plan has all sections populated.
@@ -157,6 +178,12 @@ fn every_screen_renders_through_both_flows() {
     h.pump_until("restore report", |a| {
         matches!(a.screen, Screen::RestoreReport { .. })
     });
+    h.app.set_ejector(Box::new(EjectOutcome::success));
+    h.key(KeyCode::Char('e'));
+    assert!(
+        h.buffer_text().contains("safe to unplug"),
+        "the restore report must show the eject outcome"
+    );
     h.key(KeyCode::Enter); // Home
 
     // Configure-sync flow.
