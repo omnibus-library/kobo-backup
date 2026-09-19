@@ -112,7 +112,7 @@ impl Inventory {
     /// Largest files, for the "what is actually in here" summary screen.
     pub fn largest(&self, n: usize) -> Vec<&FileEntry> {
         let mut sorted: Vec<&FileEntry> = self.files.iter().collect();
-        sorted.sort_by(|a, b| b.size.cmp(&a.size));
+        sorted.sort_by_key(|b| std::cmp::Reverse(b.size));
         sorted.truncate(n);
         sorted
     }
@@ -219,7 +219,7 @@ pub fn scan(root: &Path, progress: ProgressFn, cancel: &CancelToken) -> Result<I
         total_bytes += size;
         pending.push((path.to_path_buf(), rel, size));
 
-        if pending.len() % 100 == 0 {
+        if pending.len().is_multiple_of(100) {
             progress(ProgressUpdate {
                 phase: "Enumerating files".into(),
                 current_path: rel_string(root, path).unwrap_or_default(),
