@@ -375,32 +375,41 @@ fn an_unplugged_kobo_never_leaves_the_cursor_on_quit() {
         4,
         "the eject row must be gone once the device is gone"
     );
+    assert!(
+        matches!(app.screen, Screen::Home { selected: 2 }),
+        "a cursor on the vanished Eject row must land on Configure sync"
+    );
+    assert_eq!(app.home_items()[2], HomeItem::ConfigureSync);
     key(&mut app, KeyCode::Enter);
     assert!(
         !app.should_quit,
         "a rescan must never leave the cursor on Quit"
     );
+}
 
-    // Cursor already on Quit (index 4 of 5) when the device disappears.
-    let (_guard2, mount2) = stage_fake_device();
-    let mut app2 = app_for(&mount2, out.path());
-    key(&mut app2, KeyCode::Down);
-    key(&mut app2, KeyCode::Down);
-    key(&mut app2, KeyCode::Down);
-    key(&mut app2, KeyCode::Down);
-    assert!(matches!(app2.screen, Screen::Home { selected: 4 }));
+#[test]
+fn a_cursor_on_quit_stays_on_quit_when_the_kobo_is_unplugged() {
+    // Cursor deliberately on Quit (index 4 of 5) when the device disappears
+    // — the shrunk menu (4 items) must still have that cursor on Quit, not
+    // on whatever now occupies the old Quit index.
+    let (_guard, mount) = stage_fake_device();
+    let out = tempfile::tempdir().unwrap();
+    let mut app = app_for(&mount, out.path());
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Down);
+    assert!(matches!(app.screen, Screen::Home { selected: 4 }));
 
-    std::fs::remove_dir_all(mount2.join(".kobo")).unwrap();
+    std::fs::remove_dir_all(mount.join(".kobo")).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(1100));
-    app2.handle(Event::Tick);
+    app.handle(Event::Tick);
 
-    let items2 = app2.home_items();
-    if let Screen::Home { selected } = app2.screen {
-        assert!(
-            selected < items2.len(),
-            "selection must stay within the shrunk menu"
-        );
-    }
+    assert!(
+        matches!(app.screen, Screen::Home { selected: 3 }),
+        "a cursor deliberately on Quit must stay on Quit, not slide to Configure sync"
+    );
+    assert_eq!(app.home_items()[3], HomeItem::Quit);
 }
 
 #[test]

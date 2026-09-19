@@ -375,17 +375,24 @@ impl App {
         // Only a shrinking menu can leave the cursor stranded on Quit; a
         // deliberate visit to Quit must never be undone by an unrelated tick.
         if self.home_items().len() < items_before {
-            self.clamp_home_selection();
+            self.clamp_home_selection(items_before);
         }
     }
 
     /// A rescan must never leave Home's cursor on or past Quit as a side
     /// effect of the device list shrinking — that would turn an unrelated
-    /// keypress into an accidental quit.
-    fn clamp_home_selection(&mut self) {
+    /// keypress into an accidental quit. But a cursor deliberately parked on
+    /// Quit before the shrink must stay on Quit: `items_before` is the item
+    /// count before the menu shrank, so that case can be told apart from a
+    /// cursor that was on (or past) the row that just vanished.
+    fn clamp_home_selection(&mut self, items_before: usize) {
         if let Screen::Home { selected } = self.screen {
             let len = self.home_items().len();
-            if selected + 1 >= len {
+            if selected == items_before.saturating_sub(1) {
+                self.screen = Screen::Home {
+                    selected: len.saturating_sub(1),
+                };
+            } else if selected + 1 >= len {
                 self.screen = Screen::Home {
                     selected: len.saturating_sub(2),
                 };
@@ -500,11 +507,12 @@ impl App {
                     HomeItem::Restore => self.start_flow(Flow::Restore),
                     HomeItem::ConfigureSync => self.start_flow(Flow::ConfigureSync),
                     HomeItem::Eject => {
+                        let items_before = items.len();
                         self.eject_device();
                         // Ejecting can remove the Eject row itself; keep the
                         // cursor on a real item and never let it slide onto
                         // Quit as a side effect of the menu shrinking.
-                        self.clamp_home_selection();
+                        self.clamp_home_selection(items_before);
                     }
                     HomeItem::Quit => self.should_quit = true,
                 }
