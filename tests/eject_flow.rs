@@ -496,3 +496,28 @@ fn a_failed_eject_line_clears_when_the_device_is_unplugged() {
         "a stale failure line must not outlive the device it was about:\n{screen}"
     );
 }
+
+#[test]
+fn a_missing_manual_device_never_falls_back_to_scanning() {
+    // A `--device` that no longer probes must never make Home fall back to
+    // scanning the usual mount roots — that could show (and let the user
+    // eject) a different Kobo than the one they named.
+    let (_guard, mount) = stage_fake_device();
+    let out = tempfile::tempdir().unwrap();
+    let mut app = app_for(&mount, out.path());
+    assert_eq!(app.home_items().len(), 5, "the named device starts present");
+
+    std::fs::remove_dir_all(mount.join(".kobo")).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    app.handle(Event::Tick);
+
+    assert!(
+        app.devices.is_empty(),
+        "a dead manual device must never be replaced by a scan result"
+    );
+    assert_eq!(
+        app.home_items().len(),
+        4,
+        "with no devices, the menu must drop back to 4 items"
+    );
+}

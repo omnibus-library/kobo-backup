@@ -304,20 +304,19 @@ impl App {
     }
 
     /// Refresh `devices` for Home. A device named with `--device` is treated
-    /// as authoritative: if it still probes, that is the only device shown
-    /// and the mount roots are not scanned at all — other volumes would just
-    /// be noise on a machine the user has already pointed at one Kobo. Only
-    /// when there is no manual device, or it no longer probes, does Home fall
-    /// back to scanning the usual mount roots. `enter_detect` has its own,
-    /// unrelated scan-plus-manual-insert logic and is not affected by this.
+    /// as authoritative: it is probed directly, and that probe result — a
+    /// one-element vec, or empty if it no longer probes — is the only thing
+    /// shown. The mount roots are never scanned in this case; if the named
+    /// device no longer probes, Home shows no device until it is back,
+    /// rather than risk showing (and letting the user eject) a different
+    /// Kobo than the one they named. Only when there is no manual device
+    /// does Home fall back to scanning the usual mount roots. `enter_detect`
+    /// has its own, unrelated scan-plus-manual-insert logic and is not
+    /// affected by this.
     fn refresh_devices(&mut self) {
         let items_before = self.home_items().len();
-        self.devices = match self
-            .manual_device
-            .as_deref()
-            .and_then(|m| device::probe(m).ok())
-        {
-            Some(d) => vec![d],
+        self.devices = match &self.manual_device {
+            Some(m) => device::probe(m).ok().into_iter().collect(),
             None => device::scan(),
         };
         self.last_device_scan = Some(Instant::now());
