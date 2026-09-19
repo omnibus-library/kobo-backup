@@ -64,15 +64,7 @@ impl Harness {
     /// The current frame as plain text, for content assertions beyond "not
     /// blank".
     fn buffer_text(&self) -> String {
-        let buffer = self.terminal.backend().buffer();
-        (0..buffer.area.height)
-            .map(|y| {
-                (0..buffer.area.width)
-                    .map(|x| buffer[(x, y)].symbol().to_string())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        common::buffer_text(self.terminal.backend().buffer())
     }
 
     fn type_str(&mut self, s: &str) {

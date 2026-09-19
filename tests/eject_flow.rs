@@ -59,15 +59,7 @@ fn recording_ejector(calls: Arc<Mutex<Vec<PathBuf>>>, ok: bool, unmount: bool) -
 fn rendered_at(app: &App, width: u16, height: u16) -> String {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|f| ui::draw(f, app)).unwrap();
-    let buffer = terminal.backend().buffer().clone();
-    (0..buffer.area.height)
-        .map(|y| {
-            (0..buffer.area.width)
-                .map(|x| buffer[(x, y)].symbol().to_string())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+    common::buffer_text(terminal.backend().buffer())
 }
 
 /// The whole screen as text, one string per terminal row, on a roomy
