@@ -194,6 +194,6 @@ pub fn list_backup_zips(dir: &Path) -> Vec<PathBuf> {
             }
         }
     }
-    zips.sort_by(|a, b| b.0.cmp(&a.0));
+    zips.sort_by_key(|b| std::cmp::Reverse(b.0));
     zips.into_iter().map(|(_, p)| p).collect()
 }
