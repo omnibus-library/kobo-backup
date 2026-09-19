@@ -9,9 +9,7 @@ use tempfile::TempDir;
 
 pub const TEST_SERIAL: &str = "N000TESTSERIAL";
 
-/// The whole terminal buffer as plain text, one string per row, joined with
-/// newlines. Shared by every test harness that renders a `TestBackend` frame
-/// and wants to assert on its content.
+/// The whole terminal buffer as plain text, one string per row.
 pub fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
     (0..buffer.area.height)
         .map(|y| {

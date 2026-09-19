@@ -1,9 +1,4 @@
-//! Ejecting the connected Kobo — and saying what happened.
-//!
-//! The command itself is built by a pure function so it can be unit-tested
-//! without running anything; `run_eject` is the only part that touches the
-//! system. Nothing here is fire-and-forget: every attempt produces an
-//! `EjectOutcome` that a screen renders verbatim.
+//! Ejecting the connected Kobo — `run_eject` is the only part that touches the system.
 
 use std::path::{Path, PathBuf};
 
@@ -55,24 +50,17 @@ impl EjectOutcome {
     }
 }
 
-/// Program plus arguments that eject `mount` on `os` (the values of
-/// `std::env::consts::OS`). `None` means this platform has no command we know.
+/// The program plus arguments that eject `mount` on `os`; `None` if unknown.
 pub fn eject_command(mount: &Path, os: &str) -> Option<(String, Vec<String>)> {
     let mount = mount.display().to_string();
     match os {
         "macos" => Some(("diskutil".to_string(), vec!["eject".to_string(), mount])),
-        // We only ever know the mount path, so unmount by path and report
-        // whatever the kernel says if it refuses.
         "linux" => Some(("umount".to_string(), vec![mount])),
         _ => None,
     }
 }
 
-/// Classify the result of having run `program` against `mount`: success or
-/// failure, and in the failure case, the command's own words for why (stderr,
-/// falling back to stdout, falling back to a generic exit-status message).
-/// Pure so the classification logic can be unit-tested without spawning
-/// anything.
+/// Classify a finished eject command, with the command's own words on failure.
 fn outcome_from(
     mount: &Path,
     program: &str,
@@ -93,8 +81,7 @@ fn outcome_from(
     EjectOutcome::failure(mount, detail)
 }
 
-/// Run the platform eject command and report the result. Never panics, never
-/// swallows the reason for a failure.
+/// Run the platform eject command and report the result.
 pub fn run_eject(mount: &Path) -> EjectOutcome {
     let Some((program, args)) = eject_command(mount, std::env::consts::OS) else {
         return EjectOutcome::failure(mount, UNSUPPORTED);
@@ -160,8 +147,6 @@ mod tests {
     #[cfg(unix)]
     fn exit_status(code: i32) -> std::process::ExitStatus {
         use std::os::unix::process::ExitStatusExt;
-        // Raw wait-status encoding: a normal exit packs the code into the
-        // high byte; 0 means success.
         std::process::ExitStatus::from_raw(code << 8)
     }
 

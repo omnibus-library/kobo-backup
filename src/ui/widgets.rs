@@ -67,8 +67,7 @@ pub fn safety_line(f: &mut Frame, area: Rect, text: &str, color: Color) {
     );
 }
 
-/// The result of the last eject attempt — the same words on every screen
-/// that can trigger one.
+/// The result of the last eject attempt, shown the same way on every screen.
 pub fn eject_lines(outcome: &crate::eject::EjectOutcome) -> Vec<Line<'static>> {
     if outcome.ok {
         return vec![Line::from(Span::styled(
@@ -80,9 +79,7 @@ pub fn eject_lines(outcome: &crate::eject::EjectOutcome) -> Vec<Line<'static>> {
         outcome.headline(),
         Style::default().fg(DANGER).bold(),
     ))];
-    // The busy hint only makes sense when the eject command itself refused —
-    // not when this platform has no eject command, or the command could not
-    // even be run.
+    // Only shown when the command itself refused, not for an unsupported platform or a failed spawn.
     let refused = outcome.detail != crate::eject::UNSUPPORTED
         && !outcome.detail.starts_with("could not run ");
     if refused {

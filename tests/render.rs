@@ -61,8 +61,7 @@ impl Harness {
         self.draw();
     }
 
-    /// The current frame as plain text, for content assertions beyond "not
-    /// blank".
+    /// The current frame as plain text.
     fn buffer_text(&self) -> String {
         common::buffer_text(self.terminal.backend().buffer())
     }

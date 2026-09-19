@@ -1,5 +1,4 @@
-//! The eject action, driven through the real App state machine. A stub
-//! ejector stands in for diskutil/umount and records what it was asked to do.
+//! The eject action, driven through the real App state machine with a stub ejector.
 
 mod common;
 
@@ -37,9 +36,7 @@ fn app_for(mount: &Path, out_dir: &Path) -> App {
     App::new(&args, tx)
 }
 
-/// Records every mount it is asked to eject. With `unmount`, it also removes
-/// `.kobo` so a later rescan sees the volume as gone, the way a real eject
-/// would.
+/// Records every mount it is asked to eject; `unmount` also removes `.kobo`.
 fn recording_ejector(calls: Arc<Mutex<Vec<PathBuf>>>, ok: bool, unmount: bool) -> Ejector {
     Box::new(move |mount: &Path| {
         calls.lock().unwrap().push(mount.to_path_buf());
@@ -54,16 +51,14 @@ fn recording_ejector(calls: Arc<Mutex<Vec<PathBuf>>>, ok: bool, unmount: bool) -
     })
 }
 
-/// The whole screen as text, one string per terminal row, on a terminal of
-/// the given size.
+/// The whole screen as text, on a terminal of the given size.
 fn rendered_at(app: &App, width: u16, height: u16) -> String {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|f| ui::draw(f, app)).unwrap();
     common::buffer_text(terminal.backend().buffer())
 }
 
-/// The whole screen as text, one string per terminal row, on a roomy
-/// terminal.
+/// The whole screen as text, on a roomy terminal.
 fn rendered(app: &App) -> String {
     rendered_at(app, 200, 40)
 }
@@ -141,7 +136,6 @@ fn a_failed_eject_is_reported_not_swallowed() {
     assert!(outcome.detail.contains("dissenter"));
     assert_eq!(calls.lock().unwrap().len(), 1);
 
-    // Leaving the screen must not leave a stale message behind.
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.screen, Screen::Home { .. }));
     assert!(app.last_eject.is_none(), "last_eject must clear on go_home");
@@ -354,9 +348,7 @@ fn home_rescans_on_a_tick_but_only_once_a_second() {
 
 #[test]
 fn an_unplugged_kobo_never_leaves_the_cursor_on_quit() {
-    // Cursor sitting on Eject (index 3 of 5) when the device disappears
-    // without ever being ejected through the UI — a rescan must not let the
-    // now-shrunk menu put that same index on Quit.
+    // Cursor sits on Eject (index 3 of 5) before the device disappears.
     let (_guard, mount) = stage_fake_device();
     let out = tempfile::tempdir().unwrap();
     let mut app = app_for(&mount, out.path());
@@ -389,9 +381,7 @@ fn an_unplugged_kobo_never_leaves_the_cursor_on_quit() {
 
 #[test]
 fn a_cursor_on_quit_stays_on_quit_when_the_kobo_is_unplugged() {
-    // Cursor deliberately on Quit (index 4 of 5) when the device disappears
-    // — the shrunk menu (4 items) must still have that cursor on Quit, not
-    // on whatever now occupies the old Quit index.
+    // Cursor sits on Quit (index 4 of 5) before the device disappears.
     let (_guard, mount) = stage_fake_device();
     let out = tempfile::tempdir().unwrap();
     let mut app = app_for(&mount, out.path());
@@ -508,9 +498,6 @@ fn a_failed_eject_line_clears_when_the_device_is_unplugged() {
 
 #[test]
 fn a_missing_manual_device_never_falls_back_to_scanning() {
-    // A `--device` that no longer probes must never make Home fall back to
-    // scanning the usual mount roots — that could show (and let the user
-    // eject) a different Kobo than the one they named.
     let (_guard, mount) = stage_fake_device();
     let out = tempfile::tempdir().unwrap();
     let mut app = app_for(&mount, out.path());
@@ -538,17 +525,15 @@ fn a_stale_eject_line_clears_on_the_sync_report_too() {
     let out = tempfile::tempdir().unwrap();
     let mut app = app_for(&mount, out.path());
     let calls = Arc::new(Mutex::new(Vec::new()));
-    // Fails, and does not unmount — the same shape as a real refused eject.
     app.set_ejector(recording_ejector(calls.clone(), false, false));
 
-    // Home → Configure wireless sync → device → URL → confirm → apply.
     key(&mut app, KeyCode::Down);
     key(&mut app, KeyCode::Down);
     key(&mut app, KeyCode::Enter);
-    key(&mut app, KeyCode::Enter); // select the device
+    key(&mut app, KeyCode::Enter);
     type_str(&mut app, "https://omni.example.com/kobo/tok123");
-    key(&mut app, KeyCode::Enter); // preview
-    key(&mut app, KeyCode::Tab); // select Apply
+    key(&mut app, KeyCode::Enter);
+    key(&mut app, KeyCode::Tab);
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.screen, Screen::SyncEndpointReport));
 

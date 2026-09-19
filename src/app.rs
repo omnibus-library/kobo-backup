@@ -23,8 +23,7 @@ use crate::CliArgs;
 pub const SERIAL_OVERRIDE_PHRASE: &str = "DIFFERENT DEVICE";
 pub const RESTORE_PHRASE: &str = "RESTORE";
 
-/// How the app ejects a device. Boxed so tests can swap in a recorder instead
-/// of shelling out to `diskutil`.
+/// How the app ejects a device; boxed so tests can swap in a recorder.
 pub type Ejector = Box<dyn Fn(&std::path::Path) -> EjectOutcome>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,7 +35,7 @@ pub enum Flow {
     ConfigureSync,
 }
 
-/// A row on the main menu. Eject only exists while a Kobo is mounted.
+/// A row on the main menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HomeItem {
     Backup,
@@ -58,8 +57,7 @@ impl HomeItem {
     }
 }
 
-/// How often Home looks for a device appearing or vanishing. Ticks arrive
-/// every 100ms; scanning that often would hammer the filesystem for nothing.
+/// How often Home looks for a device appearing or vanishing.
 const HOME_RESCAN_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Which screen is on. Payload-light: shared data lives on `App`.
@@ -164,18 +162,13 @@ pub struct App {
     /// Path the chosen backup location is persisted to.
     pub config_path: PathBuf,
     pub manual_device: Option<PathBuf>,
-    /// Runs the platform eject command. Swapped out in tests.
     ejector: Ejector,
-    /// Outcome of the most recent eject, shown on the screen that asked for
-    /// it. Cleared when that screen is left (`go_home`) and also when a
-    /// rescan finds the same device mounted again (`refresh_devices`) — a
-    /// remounted device must never still claim to be "safe to unplug".
+    /// Outcome of the most recent eject. Cleared on `go_home` and on remount.
     pub last_eject: Option<EjectOutcome>,
 
     // Detection results (kept out of Screen so rescans are cheap).
     pub devices: Vec<Device>,
     pub stale_partials: Vec<PathBuf>,
-    /// When `devices` was last refreshed — throttles the Home rescan.
     last_device_scan: Option<Instant>,
 
     // Worker state.
@@ -273,8 +266,6 @@ impl App {
             sync_candidate: None,
             sync_outcome: None,
         };
-        // Home is the first screen shown, so it should already know about a
-        // device that was plugged in before launch.
         app.refresh_devices();
         app
     }
@@ -288,11 +279,7 @@ impl App {
         self.ejector = ejector;
     }
 
-    /// Home watches for a Kobo being plugged in or pulled out, at most once
-    /// a second. The report screens do not scan for devices, but a stale
-    /// eject line on them (unplug after a refused eject, or remount after a
-    /// successful one) must still resolve without waiting for the user to
-    /// navigate away — so they reconcile `last_eject` on the same throttle.
+    /// Rescan Home, or reconcile a stale eject line on a report screen.
     fn on_tick(&mut self) {
         match self.screen {
             Screen::Home { .. } => {
@@ -311,9 +298,6 @@ impl App {
         }
     }
 
-    /// Whether enough time has passed since the last device probe to allow
-    /// another one. Shared by Home's rescan and the report screens' eject
-    /// reconciliation so the two never poll independently of each other.
     fn rescan_due(&self) -> bool {
         match self.last_device_scan {
             Some(at) => at.elapsed() >= HOME_RESCAN_INTERVAL,
@@ -321,11 +305,7 @@ impl App {
         }
     }
 
-    /// A stale `last_eject` line only makes sense while the fact it
-    /// described has not changed: a success line ("safe to unplug") must
-    /// clear once the mount comes back, and a failure line ("could not
-    /// eject") must clear once the mount is gone — either way the line no
-    /// longer describes reality.
+    /// Clears `last_eject` once presence matches it: remounted after success, gone after failure.
     fn reconcile_eject_outcome(&mut self, present: bool) {
         if let Some(outcome) = &self.last_eject {
             if outcome.ok == present {
@@ -334,9 +314,6 @@ impl App {
         }
     }
 
-    /// Reconcile `last_eject` on a report screen, without scanning for
-    /// devices — just a liveness check on the mount the eject applied to,
-    /// the same one `Device::is_present` uses.
     fn reconcile_report_eject(&mut self) {
         self.last_device_scan = Some(Instant::now());
         let present = self
@@ -348,16 +325,8 @@ impl App {
         }
     }
 
-    /// Refresh `devices` for Home. A device named with `--device` is treated
-    /// as authoritative: it is probed directly, and that probe result — a
-    /// one-element vec, or empty if it no longer probes — is the only thing
-    /// shown. The mount roots are never scanned in this case; if the named
-    /// device no longer probes, Home shows no device until it is back,
-    /// rather than risk showing (and letting the user eject) a different
-    /// Kobo than the one they named. Only when there is no manual device
-    /// does Home fall back to scanning the usual mount roots. `enter_detect`
-    /// has its own, unrelated scan-plus-manual-insert logic and is not
-    /// affected by this.
+    /// Refresh `devices` for Home. A `--device` is probed directly and never
+    /// falls back to scanning, so a dead named device is never swapped for a different Kobo.
     fn refresh_devices(&mut self) {
         let items_before = self.home_items().len();
         self.devices = match &self.manual_device {
@@ -372,19 +341,12 @@ impl App {
         if let Some(present) = present {
             self.reconcile_eject_outcome(present);
         }
-        // Only a shrinking menu can leave the cursor stranded on Quit; a
-        // deliberate visit to Quit must never be undone by an unrelated tick.
         if self.home_items().len() < items_before {
             self.clamp_home_selection(items_before);
         }
     }
 
-    /// A rescan must never leave Home's cursor on or past Quit as a side
-    /// effect of the device list shrinking — that would turn an unrelated
-    /// keypress into an accidental quit. But a cursor deliberately parked on
-    /// Quit before the shrink must stay on Quit: `items_before` is the item
-    /// count before the menu shrank, so that case can be told apart from a
-    /// cursor that was on (or past) the row that just vanished.
+    /// Keeps the cursor off Quit after a shrink, unless it was parked there already.
     fn clamp_home_selection(&mut self, items_before: usize) {
         if let Screen::Home { selected } = self.screen {
             let len = self.home_items().len();
@@ -495,9 +457,7 @@ impl App {
                 self.stale_partials.clear();
             }
             KeyCode::Char('c') => self.enter_choose_backup_dir(None),
-            // A device pulled out between the last rescan and this keypress
-            // shrinks the list; a stale index must never fall through to
-            // Quit — do nothing rather than guess.
+            // A stale index (device unplugged since the last rescan) does nothing rather than guess.
             KeyCode::Enter => {
                 let Some(item) = items.get(selected).copied() else {
                     return;
@@ -509,9 +469,6 @@ impl App {
                     HomeItem::Eject => {
                         let items_before = items.len();
                         self.eject_device();
-                        // Ejecting can remove the Eject row itself; keep the
-                        // cursor on a real item and never let it slide onto
-                        // Quit as a side effect of the menu shrinking.
                         self.clamp_home_selection(items_before);
                     }
                     HomeItem::Quit => self.should_quit = true,
@@ -1652,9 +1609,6 @@ impl App {
         }
     }
 
-    /// Which device an eject on the current screen applies to. Home ejects
-    /// what is mounted right now; a flow screen ejects the device that flow
-    /// worked on.
     fn eject_target(&self) -> Option<PathBuf> {
         match self.screen {
             Screen::Home { .. } => self.devices.first().map(|d| d.mount.clone()),
@@ -1662,8 +1616,6 @@ impl App {
         }
     }
 
-    /// Eject, then say what happened — success or failure, in the command's
-    /// own words.
     fn eject_device(&mut self) {
         let Some(mount) = self.eject_target() else {
             return;
