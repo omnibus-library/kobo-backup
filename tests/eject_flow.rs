@@ -178,8 +178,41 @@ fn home_outcome_is_visible_on_an_80x24_terminal() {
         "the busy hint must survive a small terminal:\n{screen}"
     );
     assert!(
+        screen.contains("then try again"),
+        "the busy hint must not be truncated on a small terminal:\n{screen}"
+    );
+    assert!(
         screen.contains("Backups folder:"),
         "the notes area must not be squeezed out entirely:\n{screen}"
+    );
+    for label in [
+        "Back up my Kobo",
+        "Restore my Kobo",
+        "Configure wireless sync",
+        "Eject my Kobo",
+        "Quit",
+    ] {
+        assert!(
+            screen.contains(label),
+            "every menu label must survive an 80x24 terminal, missing {label}:\n{screen}"
+        );
+    }
+    assert!(
+        !screen.contains("Point-in-time backup"),
+        "the intro is intentionally dropped at 80x24 to make room for the menu and notes:\n{screen}"
+    );
+}
+
+#[test]
+fn home_intro_is_shown_when_there_is_room() {
+    let (_guard, mount) = stage_fake_device();
+    let out = tempfile::tempdir().unwrap();
+    let app = app_for(&mount, out.path());
+
+    let screen = rendered_at(&app, 120, 40);
+    assert!(
+        screen.contains("Point-in-time backup"),
+        "a roomy terminal must still show the intro:\n{screen}"
     );
 }
 

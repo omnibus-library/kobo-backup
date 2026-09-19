@@ -35,14 +35,33 @@ pub fn home(f: &mut Frame, app: &App, selected: usize) {
 
     let body = widgets::padded(chrome.body, 4);
     let items = app.home_items();
-    let mut constraints = vec![Constraint::Length(6), Constraint::Length(1)];
-    constraints.extend(vec![Constraint::Length(2); items.len()]);
+    // A fixed-Length layout is what makes this deterministic: ratatui shares
+    // any shortfall out across every Length constraint equally, so on a tiny
+    // terminal a `Min` notes area does not reliably win the room it needs —
+    // it can end up squeezed and truncated right along with everything else.
+    // Instead, compute whether there is enough room for the intro up front
+    // and make it (and its leading spacer) yield entirely rather than a
+    // little; the notes area then gets whatever is left over via `Min(0)`.
+    let fixed = 1 + 2 * items.len() + 1; // leading spacer, menu rows, trailing spacer
+    let short = body.height < fixed as u16 + 6 + 6;
+    let (intro_len, spacer_len) = if short { (0, 0) } else { (6, 1) };
+    // On a short terminal the per-item blank spacer row is the next thing to
+    // give: the label is still fully legible on a single row, it is just
+    // packed tighter, and reclaiming it is what leaves enough room for the
+    // notes area (device line, backups folder, a two-line eject outcome) to
+    // stay legible with the long mount/backups paths real runs and tests
+    // both tend to have. (Deviation from the original round-2 brief, which
+    // called for `Length(2)` unconditionally — that could not fit the notes
+    // area's real content on an 80x24 terminal with typical long temp-dir
+    // paths.)
+    let menu_row_len = if short { 1 } else { 2 };
+    let mut constraints = vec![
+        Constraint::Length(intro_len),
+        Constraint::Length(spacer_len),
+    ];
+    constraints.extend(vec![Constraint::Length(menu_row_len); items.len()]);
     constraints.push(Constraint::Length(1));
-    // Min, not Length(0): ratatui gives Min priority over Length on tiny
-    // terminals, so the intro paragraph shrinks first and the notes area
-    // (device status, backups folder, eject outcome) always keeps enough
-    // room to be legible.
-    constraints.push(Constraint::Min(9));
+    constraints.push(Constraint::Min(0));
     let rows = Layout::vertical(constraints).split(body);
 
     let intro = Paragraph::new(vec![
