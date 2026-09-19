@@ -311,6 +311,7 @@ impl App {
     /// back to scanning the usual mount roots. `enter_detect` has its own,
     /// unrelated scan-plus-manual-insert logic and is not affected by this.
     fn refresh_devices(&mut self) {
+        let items_before = self.home_items().len();
         self.devices = match self
             .manual_device
             .as_deref()
@@ -320,11 +321,34 @@ impl App {
             None => device::scan(),
         };
         self.last_device_scan = Some(Instant::now());
-        // A device that is mounted again must never sit under "safe to
-        // unplug" from a previous eject.
+        // A device is either still mounted, or it is not; a stale eject
+        // outcome only makes sense while that fact has not changed. A
+        // success line ("safe to unplug") must clear once the mount comes
+        // back, and a failure line ("could not eject") must clear once the
+        // mount is gone — either way the line no longer describes reality.
         if let Some(outcome) = &self.last_eject {
-            if outcome.ok && self.devices.iter().any(|d| d.mount == outcome.mount) {
+            let present = self.devices.iter().any(|d| d.mount == outcome.mount);
+            if outcome.ok == present {
                 self.last_eject = None;
+            }
+        }
+        // Only a shrinking menu can leave the cursor stranded on Quit; a
+        // deliberate visit to Quit must never be undone by an unrelated tick.
+        if self.home_items().len() < items_before {
+            self.clamp_home_selection();
+        }
+    }
+
+    /// A rescan must never leave Home's cursor on or past Quit as a side
+    /// effect of the device list shrinking — that would turn an unrelated
+    /// keypress into an accidental quit.
+    fn clamp_home_selection(&mut self) {
+        if let Screen::Home { selected } = self.screen {
+            let len = self.home_items().len();
+            if selected + 1 >= len {
+                self.screen = Screen::Home {
+                    selected: len.saturating_sub(2),
+                };
             }
         }
     }
@@ -440,9 +464,7 @@ impl App {
                         // Ejecting can remove the Eject row itself; keep the
                         // cursor on a real item and never let it slide onto
                         // Quit as a side effect of the menu shrinking.
-                        let new_items = self.home_items();
-                        let selected = selected.min(new_items.len().saturating_sub(2));
-                        self.screen = Screen::Home { selected };
+                        self.clamp_home_selection();
                     }
                     HomeItem::Quit => self.should_quit = true,
                 }

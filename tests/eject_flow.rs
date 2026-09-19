@@ -335,6 +335,57 @@ fn home_rescans_on_a_tick_but_only_once_a_second() {
 }
 
 #[test]
+fn an_unplugged_kobo_never_leaves_the_cursor_on_quit() {
+    // Cursor sitting on Eject (index 3 of 5) when the device disappears
+    // without ever being ejected through the UI — a rescan must not let the
+    // now-shrunk menu put that same index on Quit.
+    let (_guard, mount) = stage_fake_device();
+    let out = tempfile::tempdir().unwrap();
+    let mut app = app_for(&mount, out.path());
+
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Down);
+    assert!(matches!(app.screen, Screen::Home { selected: 3 }));
+
+    std::fs::remove_dir_all(mount.join(".kobo")).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    app.handle(Event::Tick);
+
+    assert_eq!(
+        app.home_items().len(),
+        4,
+        "the eject row must be gone once the device is gone"
+    );
+    key(&mut app, KeyCode::Enter);
+    assert!(
+        !app.should_quit,
+        "a rescan must never leave the cursor on Quit"
+    );
+
+    // Cursor already on Quit (index 4 of 5) when the device disappears.
+    let (_guard2, mount2) = stage_fake_device();
+    let mut app2 = app_for(&mount2, out.path());
+    key(&mut app2, KeyCode::Down);
+    key(&mut app2, KeyCode::Down);
+    key(&mut app2, KeyCode::Down);
+    key(&mut app2, KeyCode::Down);
+    assert!(matches!(app2.screen, Screen::Home { selected: 4 }));
+
+    std::fs::remove_dir_all(mount2.join(".kobo")).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    app2.handle(Event::Tick);
+
+    let items2 = app2.home_items();
+    if let Screen::Home { selected } = app2.screen {
+        assert!(
+            selected < items2.len(),
+            "selection must stay within the shrunk menu"
+        );
+    }
+}
+
+#[test]
 fn home_shows_the_connected_device_and_hides_the_line_when_it_is_gone() {
     let (_guard, mount) = stage_fake_device();
     let out = tempfile::tempdir().unwrap();
