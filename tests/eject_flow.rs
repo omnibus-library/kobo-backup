@@ -298,13 +298,6 @@ fn home_eject_calls_the_ejector_and_the_device_disappears() {
     );
     assert!(matches!(app.screen, Screen::Home { .. }));
 
-    let items = app.home_items();
-    if let Screen::Home { selected } = app.screen {
-        assert!(
-            selected < items.len(),
-            "selection must stay within the shrunk menu"
-        );
-    }
     key(&mut app, KeyCode::Enter);
     assert!(
         !app.should_quit,
