@@ -50,10 +50,7 @@ pub fn home(f: &mut Frame, app: &App, selected: usize) {
     // packed tighter, and reclaiming it is what leaves enough room for the
     // notes area (device line, backups folder, a two-line eject outcome) to
     // stay legible with the long mount/backups paths real runs and tests
-    // both tend to have. (Deviation from the original round-2 brief, which
-    // called for `Length(2)` unconditionally — that could not fit the notes
-    // area's real content on an 80x24 terminal with typical long temp-dir
-    // paths.)
+    // both tend to have.
     let menu_row_len = if short { 1 } else { 2 };
     let mut constraints = vec![
         Constraint::Length(intro_len),
