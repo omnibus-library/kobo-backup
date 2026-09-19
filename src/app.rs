@@ -288,18 +288,63 @@ impl App {
         self.ejector = ejector;
     }
 
-    /// Home is the only screen that watches for a Kobo being plugged in or
-    /// pulled out, and it looks at most once a second.
+    /// Home watches for a Kobo being plugged in or pulled out, at most once
+    /// a second. The report screens do not scan for devices, but a stale
+    /// eject line on them (unplug after a refused eject, or remount after a
+    /// successful one) must still resolve without waiting for the user to
+    /// navigate away — so they reconcile `last_eject` on the same throttle.
     fn on_tick(&mut self) {
-        if !matches!(self.screen, Screen::Home { .. }) {
-            return;
+        match self.screen {
+            Screen::Home { .. } => {
+                if self.rescan_due() {
+                    self.refresh_devices();
+                }
+            }
+            Screen::BackupReport { .. }
+            | Screen::RestoreReport { .. }
+            | Screen::SyncEndpointReport
+                if self.last_eject.is_some() && self.rescan_due() =>
+            {
+                self.reconcile_report_eject();
+            }
+            _ => {}
         }
-        let due = match self.last_device_scan {
+    }
+
+    /// Whether enough time has passed since the last device probe to allow
+    /// another one. Shared by Home's rescan and the report screens' eject
+    /// reconciliation so the two never poll independently of each other.
+    fn rescan_due(&self) -> bool {
+        match self.last_device_scan {
             Some(at) => at.elapsed() >= HOME_RESCAN_INTERVAL,
             None => true,
-        };
-        if due {
-            self.refresh_devices();
+        }
+    }
+
+    /// A stale `last_eject` line only makes sense while the fact it
+    /// described has not changed: a success line ("safe to unplug") must
+    /// clear once the mount comes back, and a failure line ("could not
+    /// eject") must clear once the mount is gone — either way the line no
+    /// longer describes reality.
+    fn reconcile_eject_outcome(&mut self, present: bool) {
+        if let Some(outcome) = &self.last_eject {
+            if outcome.ok == present {
+                self.last_eject = None;
+            }
+        }
+    }
+
+    /// Reconcile `last_eject` on a report screen, without scanning for
+    /// devices — just a liveness check on the mount the eject applied to,
+    /// the same one `Device::is_present` uses.
+    fn reconcile_report_eject(&mut self) {
+        self.last_device_scan = Some(Instant::now());
+        let present = self
+            .last_eject
+            .as_ref()
+            .map(|outcome| outcome.mount.join(".kobo").is_dir());
+        if let Some(present) = present {
+            self.reconcile_eject_outcome(present);
         }
     }
 
@@ -320,16 +365,12 @@ impl App {
             None => device::scan(),
         };
         self.last_device_scan = Some(Instant::now());
-        // A device is either still mounted, or it is not; a stale eject
-        // outcome only makes sense while that fact has not changed. A
-        // success line ("safe to unplug") must clear once the mount comes
-        // back, and a failure line ("could not eject") must clear once the
-        // mount is gone — either way the line no longer describes reality.
-        if let Some(outcome) = &self.last_eject {
-            let present = self.devices.iter().any(|d| d.mount == outcome.mount);
-            if outcome.ok == present {
-                self.last_eject = None;
-            }
+        let present = self
+            .last_eject
+            .as_ref()
+            .map(|outcome| self.devices.iter().any(|d| d.mount == outcome.mount));
+        if let Some(present) = present {
+            self.reconcile_eject_outcome(present);
         }
         // Only a shrinking menu can leave the cursor stranded on Quit; a
         // deliberate visit to Quit must never be undone by an unrelated tick.

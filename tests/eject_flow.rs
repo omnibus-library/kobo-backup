@@ -521,3 +521,47 @@ fn a_missing_manual_device_never_falls_back_to_scanning() {
         "with no devices, the menu must drop back to 4 items"
     );
 }
+
+#[test]
+fn a_stale_eject_line_clears_on_the_sync_report_too() {
+    let (guard, mount) = stage_fake_device();
+    std::env::set_var("KOBO_BACKUP_CONF_EDIT_DIR", guard.path().join("conf-edits"));
+    let out = tempfile::tempdir().unwrap();
+    let mut app = app_for(&mount, out.path());
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    // Fails, and does not unmount — the same shape as a real refused eject.
+    app.set_ejector(recording_ejector(calls.clone(), false, false));
+
+    // Home → Configure wireless sync → device → URL → confirm → apply.
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Enter);
+    key(&mut app, KeyCode::Enter); // select the device
+    type_str(&mut app, "https://omni.example.com/kobo/tok123");
+    key(&mut app, KeyCode::Enter); // preview
+    key(&mut app, KeyCode::Tab); // select Apply
+    key(&mut app, KeyCode::Enter);
+    assert!(matches!(app.screen, Screen::SyncEndpointReport));
+
+    key(&mut app, KeyCode::Char('e'));
+    let screen = rendered(&app);
+    assert!(
+        screen.contains("Could not eject"),
+        "the failure must render before the unplug:\n{screen}"
+    );
+
+    // Unplugged for real, without ever successfully ejecting through the UI.
+    std::fs::remove_dir_all(mount.join(".kobo")).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    app.handle(Event::Tick);
+
+    assert!(
+        matches!(app.screen, Screen::SyncEndpointReport),
+        "reconciling the eject line must not navigate away from the report"
+    );
+    let screen = rendered(&app);
+    assert!(
+        !screen.contains("Could not eject"),
+        "a stale failure line on the sync report must clear once the device is gone:\n{screen}"
+    );
+}
